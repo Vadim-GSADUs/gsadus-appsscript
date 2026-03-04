@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+    <style>
+      body { padding: 15px; font-size: 13px; background-color: #f9f9f9; }
+      .section-label { font-weight: bold; color: #1b5e20; border-bottom: 2px solid #1b5e20; margin-top: 15px; margin-bottom: 5px; padding-bottom: 3px; }
+      .helper-text { font-size: 11px; color: #666; font-style: italic; background: #e8f5e9; padding: 8px; border-radius: 4px; margin-bottom: 10px; }
+      .input-field label { pointer-events: none; transform: translateY(-14px) scale(0.8); transform-origin: 0 0; color: #1b5e20 !important; }
+      select { display: block; width: 100%; height: 35px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
+      textarea { width: 100%; height: 60px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; padding: 8px; resize: vertical; }
+      .btn-save { width: 100%; background-color: #1b5e20 !important; margin-top: 20px; font-weight: bold; height: 45px; }
+      .id-view { background-color: #eee !important; border: none !important; font-weight: bold; color: #d32f2f; padding-left: 8px !important; }
+      .conditional-field { display: none; }
+      .conditional-field.visible { display: block; }
+    </style>
+  </head>
+  <body>
+    <h6 style="text-align:center; font-weight:bold;">GSADU PRODUCT ENTRY</h6>
+    
+    <!-- Section 1: Categorization -->
+    <p class="section-label">1. Categorization</p>
+    <label>Division</label>
+    <select id="division" onchange="filterCategories()">
+      <option value="" disabled selected>Select Division</option>
+    </select>
+    <label>Category</label>
+    <select id="category" onchange="updateCategoryInfo()">
+      <option value="" disabled selected>Select Division First</option>
+    </select>
+    <div id="catDesc" class="helper-text">Description will appear here...</div>
+    <div class="input-field">
+      <input type="text" id="itemId" class="id-view" readonly>
+      <label>Item ID (DIV-CAT-ITEM)</label>
+    </div>
+    
+    <!-- Section 2: Product Details -->
+    <p class="section-label">2. Product Details</p>
+    <div class="input-field">
+      <input type="text" id="productName" placeholder="Short product name">
+      <label>Product Name</label>
+    </div>
+    <label>Description</label>
+    <textarea id="description" placeholder="Detailed specs, model info, notes..."></textarea>
+    <label>Selection Tier</label>
+    <select id="tier">
+      <!-- Options populated dynamically, Standard selected by default -->
+    </select>
+    
+    <!-- Section 3: Design Options (Conditional) -->
+    <div id="designSection" class="conditional-field">
+      <p class="section-label">3. Design Options</p>
+      <div id="bundleField" class="conditional-field">
+        <label>Bundle</label>
+        <select id="bundle">
+          <option value="">None</option>
+        </select>
+      </div>
+      <div id="finishField" class="conditional-field">
+        <label>Finish</label>
+        <select id="finish">
+          <option value="">None</option>
+        </select>
+      </div>
+    </div>
+    
+    <!-- Section 4: Resources -->
+    <p class="section-label" id="resourcesLabel">3. Resources</p>
+    <div class="input-field">
+      <input type="text" id="imageUrl" placeholder="Direct link to product image">
+      <label>Image URL</label>
+    </div>
+    <div class="input-field">
+      <input type="text" id="productUrl" placeholder="Link to product page">
+      <label>Product URL</label>
+    </div>
+    
+    <button class="btn btn-save" onclick="submitData()">Save Product</button>
+    
+    <script>
+      let fullConfig = {};
+      let currentShowFields = [];
+      
+      // Initialize on load
+      google.script.run.withSuccessHandler(data => {
+        fullConfig = data;
+        
+        // Populate divisions
+        const divSelect = document.getElementById('division');
+        data.divisions.forEach(v => divSelect.add(new Option(v, v)));
+        
+        // Populate tiers with Standard as default
+        const tierSelect = document.getElementById('tier');
+        data.tiers.forEach((v, i) => {
+          const opt = new Option(v, v);
+          if (v === 'Standard') opt.selected = true;
+          tierSelect.add(opt);
+        });
+        
+        // Populate bundles
+        const bundleSelect = document.getElementById('bundle');
+        data.bundles.forEach(v => bundleSelect.add(new Option(v, v)));
+        
+        // Populate finishes
+        const finishSelect = document.getElementById('finish');
+        data.finishes.forEach(v => finishSelect.add(new Option(v, v)));
+        
+      }).getSelectionData();
+      
+      function filterCategories() {
+        const div = document.getElementById('division').value;
+        const catSelect = document.getElementById('category');
+        catSelect.innerHTML = '<option value="" disabled selected>Select Category</option>';
+        
+        // categoryData: [Parent, ID, Name, Desc, (gap H), ShowFields]
+        fullConfig.categoryData
+          .filter(c => c[0] === div)
+          .forEach(c => {
+            let opt = new Option(c[2], c[1]);  // Name as text, ID as value
+            opt.dataset.desc = c[3];           // Description
+            opt.dataset.showFields = c[5] || "";  // ShowFields (column I, index 5)
+            catSelect.add(opt);
+          });
+        
+        // Reset conditional fields
+        hideDesignFields();
+      }
+      
+      function updateCategoryInfo() {
+        const catSelect = document.getElementById('category');
+        const opt = catSelect.options[catSelect.selectedIndex];
+        
+        // Update description
+        document.getElementById('catDesc').innerText = opt.dataset.desc || "No description.";
+        
+        // Generate next Item ID
+        google.script.run
+          .withSuccessHandler(id => document.getElementById('itemId').value = id)
+          .generateNextItemID(opt.value);
+        
+        // Handle conditional design fields
+        const showFields = opt.dataset.showFields || "";
+        updateDesignFields(showFields);
+      }
+      
+      function updateDesignFields(showFields) {
+        const fields = showFields.split(',').map(f => f.trim().toLowerCase());
+        currentShowFields = fields;
+        
+        const designSection = document.getElementById('designSection');
+        const bundleField = document.getElementById('bundleField');
+        const finishField = document.getElementById('finishField');
+        const resourcesLabel = document.getElementById('resourcesLabel');
+        
+        const showBundle = fields.includes('bundle');
+        const showFinish = fields.includes('finish');
+        
+        // Toggle visibility
+        bundleField.classList.toggle('visible', showBundle);
+        finishField.classList.toggle('visible', showFinish);
+        designSection.classList.toggle('visible', showBundle || showFinish);
+        
+        // Update section numbering
+        resourcesLabel.textContent = (showBundle || showFinish) ? '4. Resources' : '3. Resources';
+        
+        // Reset values if hidden
+        if (!showBundle) document.getElementById('bundle').value = "";
+        if (!showFinish) document.getElementById('finish').value = "";
+      }
+      
+      function hideDesignFields() {
+        document.getElementById('designSection').classList.remove('visible');
+        document.getElementById('bundleField').classList.remove('visible');
+        document.getElementById('finishField').classList.remove('visible');
+        document.getElementById('resourcesLabel').textContent = '3. Resources';
+        document.getElementById('bundle').value = "";
+        document.getElementById('finish').value = "";
+        currentShowFields = [];
+      }
+      
+      function submitData() {
+        const payload = {
+          division: document.getElementById('division').value,
+          category: document.getElementById('category').options[document.getElementById('category').selectedIndex].text,
+          itemId: document.getElementById('itemId').value,
+          productName: document.getElementById('productName').value,
+          description: document.getElementById('description').value,
+          tier: document.getElementById('tier').value,
+          bundle: document.getElementById('bundle').value,
+          finish: document.getElementById('finish').value,
+          imageUrl: document.getElementById('imageUrl').value,
+          productUrl: document.getElementById('productUrl').value
+        };
+        
+        // Validation
+        if (!payload.division || !payload.category || !payload.productName) {
+          alert("Required: Division, Category, and Product Name");
+          return;
+        }
+        
+        google.script.run
+          .withSuccessHandler(msg => { alert(msg); location.reload(); })
+          .withFailureHandler(err => alert("Error: " + err))
+          .saveToDatabase(payload);
+      }
+    </script>
+  </body>
+</html>

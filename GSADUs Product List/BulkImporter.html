@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+      body { padding: 15px; font-size: 13px; background-color: #f5f5f5; }
+      h6 { text-align: center; font-weight: bold; color: #1b5e20; margin-bottom: 15px; }
+      .link-area { 
+        height: 120px; 
+        font-family: monospace; 
+        font-size: 11px; 
+        width: 100%;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        padding: 8px;
+        resize: vertical;
+      }
+      .preview-card {
+        background: white;
+        border-radius: 8px;
+        padding: 12px;
+        margin-top: 10px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      }
+      .preview-card.processing { border-left: 4px solid #ff9800; }
+      .preview-card.ready { border-left: 4px solid #4caf50; }
+      .preview-card.low-confidence { border-left: 4px solid #ffeb3b; background-color: #fffde7; }
+      .preview-card.error { border-left: 4px solid #f44336; }
+      .preview-card.saved { border-left: 4px solid #9e9e9e; opacity: 0.6; }
+      .confidence-badge {
+        float: right; font-size: 10px; padding: 2px 6px; border-radius: 4px;
+      }
+      .conf-high { background-color: #e8f5e9; color: #2e7d32; }
+      .conf-low { background-color: #fff9c4; color: #fbc02d; font-weight:bold; }
+      .product-name { font-weight: bold; font-size: 14px; color: #333; }
+      .product-name-input { 
+        font-weight: bold; 
+        font-size: 13px; 
+        border: 1px solid #ddd; 
+        border-radius: 4px; 
+        padding: 4px 8px; 
+        width: 100%; 
+        margin-bottom: 5px;
+      }
+      .product-desc { font-size: 11px; color: #666; margin: 5px 0; }
+      .product-desc-input { 
+        font-size: 11px; 
+        border: 1px solid #ddd; 
+        border-radius: 4px; 
+        padding: 4px 8px; 
+        width: 100%; 
+        height: 50px;
+        resize: vertical;
+      }
+      .edit-row { margin: 8px 0; }
+      .edit-row label { font-size: 10px; color: #666; display: block; margin-bottom: 2px; }
+      .edit-row select { 
+        display: block !important; /* Force visible */
+        width: 100%; 
+        height: 30px; 
+        font-size: 11px; 
+        border: 1px solid #ddd; 
+        border-radius: 4px; 
+        padding: 0 5px;
+        background-color: white;
+      }
+      .badge { 
+        display: inline-block;
+        padding: 2px 8px; 
+        border-radius: 4px; 
+        font-size: 10px; 
+        margin-right: 5px;
+      }
+      .badge-div { background: #e3f2fd; color: #1565c0; }
+      .badge-cat { background: #e8f5e9; color: #2e7d32; }
+      .badge-tier { background: #fff3e0; color: #ef6c00; }
+      .actions { margin-top: 10px; }
+      .btn-add { background-color: #1b5e20 !important; }
+      .btn-skip { background-color: #9e9e9e !important; margin-left: 5px; }
+      .loader { margin: 20px 0; }
+      .loader.hidden { display: none; }
+      .status-msg { font-size: 11px; color: #666; margin-top: 5px; }
+      .error-msg { color: #c62828; font-size: 11px; }
+      .stats { 
+        background: #e8f5e9; 
+        padding: 10px; 
+        border-radius: 4px; 
+        margin-top: 15px;
+        font-size: 12px;
+      }
+      .url-preview { 
+        font-size: 10px; 
+        color: #999; 
+        word-break: break-all;
+        margin-top: 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <h6>🤖 AI BULK IMPORTER</h6>
+    
+    <p style="font-size:12px; color:#666;">Paste product URLs below (one per line). The AI will analyze each link and suggest categorization.</p>
+    
+    <textarea id="links" class="link-area" placeholder="https://www.homedepot.com/p/...&#10;https://www.lowes.com/pd/...&#10;https://www.amazon.com/dp/..."></textarea>
+    
+    <div style="margin-top: 10px;">
+      <button class="btn btn-add" onclick="startImport()" id="importBtn">
+        <i class="material-icons left" style="font-size:16px;">psychology</i>
+        Analyze with AI
+      </button>
+      <button class="btn btn-skip" onclick="clearAll()" id="clearBtn">Clear</button>
+    </div>
+
+    <div id="loader" class="loader hidden">
+      <div class="progress">
+        <div class="indeterminate green"></div>
+      </div>
+      <p id="loaderText" style="text-align:center; font-size:11px; color:#666;">Processing...</p>
+    </div>
+
+    <div id="stats" class="stats hidden">
+      <strong>Progress:</strong> 
+      <span id="statProcessed">0</span> processed, 
+      <span id="statSaved">0</span> saved, 
+      <span id="statErrors">0</span> errors
+    </div>
+
+    <div id="results"></div>
+
+    <script>
+      let processedCount = 0;
+      let savedCount = 0;
+      let errorCount = 0;
+      let configData = null; // Stores divisions, categories, tiers
+
+      // Load config data on startup
+      google.script.run
+        .withSuccessHandler(data => { configData = data; })
+        .withFailureHandler(err => console.error("Failed to load config:", err))
+        .getSelectionData();
+
+      function startImport() {
+        const linksText = document.getElementById('links').value;
+        const links = linksText.split('\n')
+          .map(l => l.trim())
+          .filter(l => l !== "" && (l.startsWith('http://') || l.startsWith('https://')));
+        
+        if (links.length === 0) {
+          alert("Please paste valid URLs (starting with http:// or https://)");
+          return;
+        }
+        
+        // Reset counters
+        processedCount = 0;
+        savedCount = 0;
+        errorCount = 0;
+        updateStats();
+        
+        document.getElementById('importBtn').disabled = true;
+        document.getElementById('loader').classList.remove('hidden');
+        document.getElementById('stats').classList.remove('hidden');
+        document.getElementById('results').innerHTML = "";
+        document.getElementById('loaderText').textContent = `Processing 0 of ${links.length}...`;
+
+        processQueue(links, 0);
+      }
+
+      function processQueue(links, index) {
+        if (index >= links.length) {
+          document.getElementById('importBtn').disabled = false;
+          document.getElementById('loader').classList.add('hidden');
+          document.getElementById('loaderText').textContent = 'Complete!';
+          return;
+        }
+
+        const url = links[index];
+        const cardId = "card-" + index;
+        
+        document.getElementById('loaderText').textContent = `Processing ${index + 1} of ${links.length}...`;
+        
+        // Add processing card
+        const card = document.createElement('div');
+        card.id = cardId;
+        card.className = 'preview-card processing';
+        card.innerHTML = `
+          <div class="product-name">Analyzing...</div>
+          <div class="url-preview">${url}</div>
+        `;
+        document.getElementById('results').appendChild(card);
+
+        google.script.run
+          .withSuccessHandler(data => {
+            processedCount++;
+            updateStats();
+            renderCard(cardId, data, url);
+            // Small delay to avoid rate limiting
+            setTimeout(() => processQueue(links, index + 1), 500);
+          })
+          .withFailureHandler(err => {
+            processedCount++;
+            errorCount++;
+            updateStats();
+            renderErrorCard(cardId, err.message || err, url);
+            setTimeout(() => processQueue(links, index + 1), 500);
+          })
+          .aiProcessLink(url);
+      }
+
+      function renderCard(cardId, data, url) {
+        const card = document.getElementById(cardId);
+        
+        // Confidence Logic
+        const confidence = data.confidence || 0;
+        const isLowConfidence = confidence < 75; // Threshold for warning
+        
+        card.className = isLowConfidence ? 'preview-card low-confidence' : 'preview-card ready';
+        
+        // Warning Header for Low Confidence
+        let warningHeader = '';
+        if (isLowConfidence) {
+          warningHeader = `
+            <div style="color:#f57f17; font-size:11px; margin-bottom:8px; display:flex; align-items:center;">
+              <i class="material-icons" style="font-size:14px; margin-right:4px;">warning</i>
+              <span>Low Confidence (${confidence}%) - Please Review Categories</span>
+            </div>
+          `;
+        } else {
+             warningHeader = `
+            <div style="color:#2e7d32; font-size:10px; margin-bottom:8px; text-align:right;">
+               Confidence: ${confidence}%
+            </div>`;
+        }
+
+        // Build division options
+        let divMatchFound = false;
+        let divOptions = '<option value="" disabled>Select Division...</option>';
+        if (configData && configData.divisions) {
+          divOptions += configData.divisions.map(d => {
+            const isSelected = d === data.division;
+            if (isSelected) divMatchFound = true;
+            return `<option value="${escapeHtml(d)}" ${isSelected ? 'selected' : ''}>${escapeHtml(d)}</option>`;
+          }).join('');
+        }
+        
+        // If AI picked a division that doesn't exist, force low confidence mode visually
+        if (!divMatchFound && data.division) isLowConfidence = true;
+
+        // Build tier options
+        let tierMatchFound = false;
+        let tierOptions = '<option value="" disabled>Select Tier... (Standard)</option>';
+        if (configData && configData.tiers) {
+          tierOptions += configData.tiers.map(t => {
+            const isSelected = t === data.tier;
+            if (isSelected) tierMatchFound = true;
+            return `<option value="${escapeHtml(t)}" ${isSelected ? 'selected' : ''}>${escapeHtml(t)}</option>`;
+          }).join('');
+        }
+        
+        card.innerHTML = `
+          ${warningHeader}
+          <div class="edit-row">
+            <label>Product Name</label>
+            <input type="text" class="product-name-input" id="${cardId}-name" value="${escapeHtml(data.cleaned_name)}">
+          </div>
+          <div class="edit-row">
+            <label>Description</label>
+            <textarea class="product-desc-input" id="${cardId}-desc">${escapeHtml(data.short_desc)}</textarea>
+          </div>
+          <div class="edit-row" style="display:flex; gap:10px;">
+            <div style="flex:1;">
+              <label>Division</label>
+              <select class="browser-default" id="${cardId}-div" onchange="updateCategories('${cardId}')" style="width:100%;">
+                ${divOptions}
+              </select>
+            </div>
+            <div style="flex:1;">
+              <label>Category</label>
+              <select class="browser-default" id="${cardId}-cat" style="width:100%;">
+                <!-- Populated by updateCategories -->
+              </select>
+            </div>
+            <div style="flex:0.6;">
+              <label>Tier</label>
+              <select class="browser-default" id="${cardId}-tier" style="width:100%;">
+                ${tierOptions}
+              </select>
+            </div>
+          </div>
+          
+          <div class="actions">
+            <button class="btn-small btn-add" onclick="saveProduct('${cardId}', this)">
+              Add to Database
+            </button>
+            <button class="btn-small btn-skip" onclick="skipProduct('${cardId}')">
+              Skip
+            </button>
+          </div>
+        `;
+        
+        // Store original data and URL
+        card.dataset.sourceUrl = url;
+        card.dataset.imageUrl = data.image_url || '';
+        
+        // Populate categories for selected division
+        updateCategories(cardId, data.category);
+      }
+
+      function updateCategories(cardId, selectedCategory = null) {
+        const divSelect = document.getElementById(cardId + '-div');
+        const catSelect = document.getElementById(cardId + '-cat');
+        const selectedDiv = divSelect.value;
+        
+        catSelect.innerHTML = '';
+        
+        if (configData && configData.categoryData) {
+          const filtered = configData.categoryData.filter(c => c[0] === selectedDiv);
+          filtered.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c[2]; // Category name
+            opt.textContent = c[2];
+            if (selectedCategory && c[2] === selectedCategory) {
+              opt.selected = true;
+            }
+            catSelect.appendChild(opt);
+          });
+        }
+      }
+
+      function renderErrorCard(cardId, error, url) {
+        const card = document.getElementById(cardId);
+        card.className = 'preview-card error';
+        card.innerHTML = `
+          <div class="product-name">❌ Failed to analyze</div>
+          <div class="error-msg">${escapeHtml(error)}</div>
+          <div class="url-preview">${escapeHtml(url)}</div>
+        `;
+      }
+
+      function saveProduct(cardId, btn) {
+        const card = document.getElementById(cardId);
+        
+        // Read values from editable fields
+        const data = {
+          cleaned_name: document.getElementById(cardId + '-name').value,
+          short_desc: document.getElementById(cardId + '-desc').value,
+          division: document.getElementById(cardId + '-div').value,
+          category: document.getElementById(cardId + '-cat').value,
+          tier: document.getElementById(cardId + '-tier').value,
+          image_url: card.dataset.imageUrl || '',
+          source_url: card.dataset.sourceUrl || ''
+        };
+        
+        btn.disabled = true;
+        btn.textContent = "Saving...";
+
+        google.script.run
+          .withSuccessHandler(msg => {
+            card.className = 'preview-card saved';
+            card.querySelector('.actions').innerHTML = `
+              <span style="color:#4caf50; font-size:12px;">✓ ${msg}</span>
+            `;
+            savedCount++;
+            updateStats();
+          })
+          .withFailureHandler(err => {
+            btn.disabled = false;
+            btn.textContent = "Retry";
+            card.querySelector('.actions').insertAdjacentHTML('beforeend', 
+              `<div class="error-msg">Error: ${escapeHtml(err.message || err)}</div>`
+            );
+          })
+          .saveAIProduct(data);
+      }
+
+      function skipProduct(cardId) {
+        const card = document.getElementById(cardId);
+        card.className = 'preview-card saved';
+        card.querySelector('.actions').innerHTML = `
+          <span style="color:#999; font-size:12px;">Skipped</span>
+        `;
+      }
+
+      function updateStats() {
+        document.getElementById('statProcessed').textContent = processedCount;
+        document.getElementById('statSaved').textContent = savedCount;
+        document.getElementById('statErrors').textContent = errorCount;
+      }
+
+      function clearAll() {
+        document.getElementById('links').value = '';
+        document.getElementById('results').innerHTML = '';
+        document.getElementById('stats').classList.add('hidden');
+        processedCount = 0;
+        savedCount = 0;
+        errorCount = 0;
+      }
+
+      function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+    </script>
+  </body>
+</html>

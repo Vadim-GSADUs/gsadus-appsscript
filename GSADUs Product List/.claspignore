@@ -1,0 +1,6 @@
+# Ignore markdown files
+**/*.md
+
+# Ignore other common non-Apps Script files
+**/*.txt
+**/node_modules/**

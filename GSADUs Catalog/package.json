@@ -1,0 +1,17 @@
+{
+  "name": "gsadus_catalog",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc",
+    "postbuild": "copy appsscript.json dist\\",
+    "watch": "tsc --watch",
+    "push": "npm run build && clasp push",
+    "pull": "clasp pull"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/google-apps-script": "^1.0.83"
+  }
+}

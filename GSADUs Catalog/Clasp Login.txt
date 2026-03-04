@@ -1,0 +1,7 @@
+# 1) Reset credentials
+clasp logout
+Remove-Item "$env:USERPROFILE\.clasprc.json" -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:USERPROFILE\.clasprc.json.pub" -Force -ErrorAction SilentlyContinue
+
+# 2) Log in again with fresh token
+clasp login --no-localhost

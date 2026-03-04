@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+    <style>
+      body { padding: 15px; font-size: 13px; background-color: #f4f4f4; }
+      .card { padding: 15px; margin-bottom: 15px; border-radius: 8px; background: white; }
+      .section-title { font-weight: bold; border-bottom: 1px solid #ddd; padding-bottom: 5px; display: block; }
+      .btn-action { width: 100%; margin-top: 10px; font-weight: bold; }
+      select, input, textarea { display: block; width: 100%; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; padding: 5px; box-sizing: border-box; }
+      textarea { height: 60px; resize: none; }
+      label { font-weight: bold; color: #555; }
+      .hint-text { font-size: 10px; color: #888; margin-top: -8px; margin-bottom: 10px; }
+    </style>
+  </head>
+  <body>
+    <h6 style="text-align:center; font-weight:bold; color: #0d47a1;">GSADU CATEGORY ADMIN</h6>
+    <div class="card" style="border-top: 4px solid #0d47a1;">
+      <span class="section-title">Add New Category</span>
+      <label>Parent Division</label>
+      <select id="addDiv" class="browser-default"></select>
+      <label>Category Name</label>
+      <input type="text" id="newName">
+      <label>Category Description</label>
+      <textarea id="newDesc"></textarea>
+      <label>Show Fields (Optional)</label>
+      <input type="text" id="showFields" placeholder="Bundle, Finish, or Bundle,Finish">
+      <p class="hint-text">Leave blank for most categories</p>
+      <button class="btn btn-action blue darken-4" onclick="handleAdd()">Create Category</button>
+    </div>
+    <div class="card" style="border-top: 4px solid #f57c00;">
+      <span class="section-title">Merge / Consolidate</span>
+      <select id="keepId" class="browser-default"></select>
+      <select id="mergeId" class="browser-default"></select>
+      <button class="btn btn-action orange darken-3" onclick="handleMerge()">Merge & Sync DB</button>
+    </div>
+    <div class="card" style="border-top: 4px solid #d32f2f;">
+      <span class="section-title">Delete Category</span>
+      <select id="delId" class="browser-default"></select>
+      <button class="btn btn-action red darken-2" onclick="handleDelete()">Remove From Config</button>
+    </div>
+    <script>
+      function load() {
+        google.script.run.withSuccessHandler(data => {
+          const addDiv = document.getElementById('addDiv');
+          addDiv.innerHTML = '<option value="" disabled selected>Select Division</option>';
+          data.divisions.forEach(d => addDiv.add(new Option(d, d)));
+          ['keepId', 'mergeId', 'delId'].forEach(s => {
+            const el = document.getElementById(s);
+            el.innerHTML = '<option value="" disabled selected>Select Category</option>';
+            data.categoryData.forEach(c => el.add(new Option(c[1] + " : " + c[2], c[1])));
+          });
+        }).getSelectionData();
+      }
+      function handleAdd() {
+        const div = document.getElementById('addDiv').value;
+        const name = document.getElementById('newName').value;
+        const desc = document.getElementById('newDesc').value;
+        const showFields = document.getElementById('showFields').value;
+        if(!div || !name) return alert("Required: Division and Name.");
+        google.script.run.withSuccessHandler(msg => { 
+          alert(msg); 
+          document.getElementById('newName').value = '';
+          document.getElementById('newDesc').value = '';
+          document.getElementById('showFields').value = '';
+          load(); 
+        }).addCategory(div, name, desc, showFields);
+      }
+      function handleMerge() {
+        const keep = document.getElementById('keepId').value;
+        const merge = document.getElementById('mergeId').value;
+        if(confirm("Merge items from " + merge + " into " + keep + "?")) {
+          google.script.run.withSuccessHandler(msg => { alert(msg); load(); }).mergeCategories(keep, merge);
+        }
+      }
+      function handleDelete() {
+        const id = document.getElementById('delId').value;
+        if(confirm("Remove " + id + "?")) {
+          google.script.run.withSuccessHandler(msg => { alert(msg); load(); }).deleteCategoryFromConfig(id);
+        }
+      }
+      window.onload = load;
+    </script>
+  </body>
+</html>
