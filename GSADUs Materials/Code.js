@@ -29,6 +29,7 @@ function onOpen() {
     .addItem('2. Sync Material Assets',      'syncMaterialAssets')
     .addItem('3. Export to JSON',            'exportToJson')
     .addSeparator()
+    .addItem('Compute Missing Scales',       'computeMissingScales')
     .addItem('Audit Materials Folder',       'auditMaterialsFolder')
     .addItem('Format Active Sheet',          'formatActiveSheetColumns')
     .addToUi();
@@ -402,6 +403,124 @@ function exportToJson() {
 
 // ── Mood Board — moved to Moodboard/MoodBoard.js (gslides-bound script) ──────
 // Script ID: 1mAkLKNGRybcALsujtsPHNz4aYxViOEfUygH3ZNYPC9qHZvi9_CLMTViS
+
+// ── Compute Scales ────────────────────────────────────────────────────────────
+
+/**
+ * For each Supplier row where File_ID is set and exactly one of VScale/HScale
+ * is filled, computes the missing value using the image's native aspect ratio:
+ *
+ *   HScale = VScale × (nativeW / nativeH)
+ *   VScale = HScale / (nativeW / nativeH)
+ *
+ * Assumes the image is an orthographic swatch framing the full material region
+ * uniformly (no crop / perspective). Values are read by MoodBoard.js and fed
+ * into Architextures (https://architextures.org) for accurate texture tiling.
+ *
+ * Rows with both scales set or neither set are left alone. Image dimensions
+ * are parsed from the file's header bytes (JPEG + PNG supported) — no Drive
+ * advanced service required.
+ */
+function computeMissingScales() {
+  const ss      = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet   = ss.getSheetByName('Supplier');
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) { ss.toast('No data rows found.', 'Scales'); return; }
+
+  const colMap = getColMap_(sheet);
+  if (!validateCols_(colMap, ['File_ID', 'VScale', 'HScale'], 'Compute Scales')) return;
+
+  const numDataRows = lastRow - 1;
+  const numCols     = sheet.getLastColumn();
+  const values      = sheet.getRange(2, 1, numDataRows, numCols).getValues();
+
+  const V_COL = colMap['VScale'] + 1;
+  const H_COL = colMap['HScale'] + 1;
+
+  const dimCache = {}; // fileId → { w, h } | null
+  const errors   = [];
+  let computed = 0;
+
+  for (let i = 0; i < numDataRows; i++) {
+    const fileId = String(values[i][colMap['File_ID']]).trim();
+    if (!fileId) continue;
+
+    const vRaw = values[i][colMap['VScale']];
+    const hRaw = values[i][colMap['HScale']];
+    const vVal = (vRaw === '' || vRaw === null) ? null : Number(vRaw);
+    const hVal = (hRaw === '' || hRaw === null) ? null : Number(hRaw);
+
+    if (vVal && hVal) continue;
+    if (!vVal && !hVal) continue;
+
+    let dims;
+    try {
+      if (!(fileId in dimCache)) dimCache[fileId] = getImageDimensions_(fileId);
+      dims = dimCache[fileId];
+    } catch (e) {
+      errors.push(`Row ${i + 2}: ${e.message}`);
+      continue;
+    }
+    if (!dims) {
+      errors.push(`Row ${i + 2}: unsupported image format`);
+      continue;
+    }
+
+    const ar = dims.w / dims.h;
+    if (vVal && !hVal) {
+      sheet.getRange(i + 2, H_COL).setValue(round2_(vVal * ar));
+    } else {
+      sheet.getRange(i + 2, V_COL).setValue(round2_(hVal / ar));
+    }
+    computed++;
+  }
+
+  const msg = `Computed ${computed} scale(s).` +
+              (errors.length ? `  Errors: ${errors.length} — see Logger.` : '');
+  if (errors.length) errors.forEach(e => Logger.log(e));
+  ss.toast(msg, 'Scales Complete', 10);
+}
+
+/**
+ * Reads native pixel dimensions from the image header bytes. Supports JPEG
+ * and PNG (covers the vast majority of material photos). Returns { w, h } or
+ * null for unsupported formats.
+ */
+function getImageDimensions_(fileId) {
+  const bytes = DriveApp.getFileById(fileId).getBlob().getBytes();
+  const u = (i) => bytes[i] & 0xFF;
+
+  // PNG: signature 89 50 4E 47 0D 0A 1A 0A, IHDR width/height at bytes 16–23
+  if (bytes.length >= 24 &&
+      u(0) === 0x89 && u(1) === 0x50 && u(2) === 0x4E && u(3) === 0x47) {
+    const w = (u(16) << 24) | (u(17) << 16) | (u(18) << 8) | u(19);
+    const h = (u(20) << 24) | (u(21) << 16) | (u(22) << 8) | u(23);
+    return { w, h };
+  }
+
+  // JPEG: starts FF D8; scan segments for an SOF marker (C0–CF, excluding
+  // C4 DHT, C8 JPG, CC DAC) to read height/width from the frame header.
+  if (u(0) === 0xFF && u(1) === 0xD8) {
+    let i = 2;
+    while (i < bytes.length - 8) {
+      if (u(i) !== 0xFF) return null;
+      const marker = u(i + 1);
+      if (marker >= 0xC0 && marker <= 0xCF &&
+          marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
+        const h = (u(i + 5) << 8) | u(i + 6);
+        const w = (u(i + 7) << 8) | u(i + 8);
+        return { w, h };
+      }
+      const len = (u(i + 2) << 8) | u(i + 3);
+      if (len < 2) return null;
+      i += 2 + len;
+    }
+  }
+
+  return null;
+}
+
+function round2_(n) { return Math.round(n * 100) / 100; }
 
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
