@@ -1,24 +1,40 @@
 /**
- * GSADUs Tools (V10)
+ * GSADUs Tools (V11 — schema 1.2)
  *
- * Columns are resolved dynamically from row 1 headers — the script does NOT
- * depend on a fixed column order. Add, remove, or reorder columns freely;
- * as long as row 1 header names match, everything continues to work.
+ * Two tabs, each a source of truth for its own entity (see docs/SOURCES.md):
  *
- * Required headers in the Supplier tab:
- *   Design_Bundle, Category, Supplier_URL, Supplier, Product_Name,
- *   Product_Size, File_ID, Drive_URL, Filename, Sync_Status
+ *   Supplier  — one row per (Design_Bundle, Category): the material/bundle data.
+ *               Required headers: Design_Bundle, Category, Supplier_URL, Supplier,
+ *               Product_Name, Product_Size
  *
- * Optional headers (read by MoodBoard.js, ignored here):
- *   VScale, HScale
+ *   Images    — one row per image, keyed to a material by Material_Key
+ *               (= canonicalBasename(Supplier, Product_Name)). Holds the
+ *               image-specific specs. Headers in IMAGES_HEADERS below.
+ *
+ * Columns are resolved dynamically from the header row — order is not significant.
+ *
+ * Image files are normalized to a canonical PNG master OUTSIDE this script
+ * (PNGTools → Conversion subtab). This script records whatever format is present;
+ * it never transcodes.
  */
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
+const SUPPLIER_SHEET      = 'Supplier';
+const IMAGES_SHEET        = 'Images';
 const MATERIALS_FOLDER_ID = '1hc2moJgK51YPqYxcmm_Zgry5YxbsbGAs';
 const TEMPLATE_ID         = '1oGLgK-aCvKVh1EIhADQsqeqWQLlUaCTo4AkmtAY9dU4';
 const BUNDLES_FOLDER_ID   = '1v7vLPjvPdMA42wGA9XqC_29DNtZP21Gk'; // Interior Design Bundles folder
 const BUNDLES_JSON_NAME   = 'bundles_library.json';
+const SCHEMA_VERSION      = '1.2';
+
+// Images tab (schema 1.2): one row per image. See docs/SOURCES.md §7.
+const IMAGES_HEADERS = [
+  'Material_Key', 'Image_Type', 'Source_URL', 'Source_Format',
+  'File_ID', 'Drive_URL', 'Filename', 'Format', 'Width_px', 'Height_px',
+  'VScale', 'HScale', 'Sync_Status', 'Notes',
+];
+const IMAGE_TYPE_TOKENS = { 'Material_Image': 'material', 'Showcase_Image': 'showcase' };
 
 // ── Menu ─────────────────────────────────────────────────────────────────────
 
@@ -26,9 +42,10 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('GSADUs Tools')
     .addItem('1. Pull from Order Template',  'pullFromOrderTemplate')
-    .addItem('2. Sync Material Assets',      'syncMaterialAssets')
+    .addItem('2. Sync Image Assets',         'syncImageAssets')
     .addItem('3. Export to JSON',            'exportToJson')
     .addSeparator()
+    .addItem('Seed Images from Supplier',    'seedImagesFromSupplier')
     .addItem('Compute Missing Scales',       'computeMissingScales')
     .addItem('Audit Materials Folder',       'auditMaterialsFolder')
     .addItem('Format Active Sheet',          'formatActiveSheetColumns')
@@ -152,217 +169,288 @@ function pullFromOrderTemplate() {
   );
 }
 
+// ── Images tab — ensure / seed ────────────────────────────────────────────────
+
+/**
+ * Returns the Images sheet, creating it with the canonical header row if absent
+ * (or backfilling the header row if the tab exists but is empty).
+ */
+function ensureImagesSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(IMAGES_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(IMAGES_SHEET);
+  }
+  if (sheet.getLastRow() === 0 || sheet.getLastColumn() === 0) {
+    sheet.getRange(1, 1, 1, IMAGES_HEADERS.length).setValues([IMAGES_HEADERS]);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+/**
+ * One-time (idempotent) migration: creates a Material_Image row in the Images tab
+ * for every unique material in the Supplier tab that currently carries image data
+ * (File_ID / Drive_URL / Filename), copying VScale/HScale across. Safe to re-run —
+ * skips any material that already has a Material_Image row.
+ *
+ * After verifying the Images-based pipeline, the legacy image columns
+ * (File_ID/Drive_URL/Filename/Sync_Status/VScale/HScale) can be removed from the
+ * Supplier tab by hand — schema 1.2 export no longer reads them.
+ */
+function seedImagesFromSupplier() {
+  const ss       = SpreadsheetApp.getActiveSpreadsheet();
+  const supplier = ss.getSheetByName(SUPPLIER_SHEET);
+  if (!supplier) { ss.toast(`No "${SUPPLIER_SHEET}" tab found.`, 'Seed Images'); return; }
+
+  const sCol = getColMap_(supplier);
+  if (!validateCols_(sCol, ['Supplier', 'Product_Name'], 'Seed Images')) return;
+
+  const sLast = supplier.getLastRow();
+  if (sLast < 2) { ss.toast('No Supplier rows.', 'Seed Images'); return; }
+
+  const sVals = supplier.getRange(2, 1, sLast - 1, supplier.getLastColumn()).getValues();
+
+  const images = ensureImagesSheet_();
+  const iCol   = getColMap_(images);
+
+  // Existing (Material_Key|Image_Type) already present → don't duplicate
+  const existing = {};
+  const iLast = images.getLastRow();
+  if (iLast > 1) {
+    images.getRange(2, 1, iLast - 1, images.getLastColumn()).getValues().forEach(r => {
+      const k = `${String(r[iCol['Material_Key']]).trim()}|${String(r[iCol['Image_Type']]).trim()}`;
+      if (k !== '|') existing[k] = true;
+    });
+  }
+
+  const has = (name) => sCol[name] !== undefined;
+  const newRows = [];
+  const seen = {};
+
+  for (let i = 0; i < sVals.length; i++) {
+    const sup  = String(sVals[i][sCol['Supplier']]).trim();
+    const prod = String(sVals[i][sCol['Product_Name']]).trim();
+    if (!sup || !prod) continue;
+
+    const key = canonicalBasename(sup, prod);
+    if (seen[key]) continue;                       // one Material_Image per material
+    seen[key] = true;
+    if (existing[`${key}|Material_Image`]) continue;
+
+    const fileId   = has('File_ID')   ? String(sVals[i][sCol['File_ID']]).trim()   : '';
+    const driveUrl = has('Drive_URL') ? String(sVals[i][sCol['Drive_URL']]).trim() : '';
+    const filename = has('Filename')  ? String(sVals[i][sCol['Filename']]).trim()  : '';
+    if (!fileId && !driveUrl && !filename) continue; // nothing to migrate
+
+    const vscale = has('VScale') ? sVals[i][sCol['VScale']] : '';
+    const hscale = has('HScale') ? sVals[i][sCol['HScale']] : '';
+    const fmt    = filename ? extOf_(filename) : '';
+
+    const row = IMAGES_HEADERS.map(h => {
+      switch (h) {
+        case 'Material_Key': return key;
+        case 'Image_Type':   return 'Material_Image';
+        case 'File_ID':      return fileId;
+        case 'Drive_URL':    return driveUrl;
+        case 'Filename':     return filename;
+        case 'Format':       return fmt;
+        case 'VScale':       return vscale;
+        case 'HScale':       return hscale;
+        case 'Sync_Status':  return filename ? 'Seeded: ' + timestamp() : '';
+        default:             return '';
+      }
+    });
+    newRows.push(row);
+  }
+
+  if (newRows.length) {
+    images.getRange(images.getLastRow() + 1, 1, newRows.length, IMAGES_HEADERS.length).setValues(newRows);
+  }
+  ss.toast(`Seeded ${newRows.length} Material_Image row(s) into "${IMAGES_SHEET}".`, 'Seed Images', 8);
+}
+
 // ── STEP 2 ───────────────────────────────────────────────────────────────────
 
 /**
- * For each Supplier row where Supplier + Product_Name are filled:
+ * For each row in the Images tab (keyed by Material_Key + Image_Type):
+ *   1. Resolves the image file from Drive_URL (URL or path) then File_ID.
+ *   2. Renames it to the canonical convention and moves it into Materials\:
+ *        {Material_Key}__{type}[-{n}].{ext}
+ *      e.g. RepublicFloor_Verona-Light__material.png
+ *           Roca_Nordico-Snow-UP-12x24__showcase-2.jpg
+ *   3. Reads native dimensions + format and writes File_ID / Drive_URL / Filename /
+ *      Format / Width_px / Height_px / Sync_Status.
  *
- *   1. Computes canonical filename: Supplier_Product-Name.ext
- *   2. Dedup check — if another row already processed the same Supplier+Product,
- *      reuses that Drive file (no duplicate files in Materials folder).
- *   3. Otherwise resolves the file from Drive_URL, which accepts:
- *        a. Google Drive URL  → https://drive.google.com/file/d/FILE_ID/...
- *        b. Windows path      → G:\Shared drives\...\filename.jpg
- *        c. Relative path     → Materials\filename.jpg
- *      Renames the file to canonical name, moves it into Materials\ if needed.
- *   4. Writes File_ID, Drive_URL (canonical), Filename, Sync_Status columns.
- *
- * CRITICAL: Supplier_URL contains =HYPERLINK() formulas. getValues() returns
- * only the display text — never write that value back to the cell or the
- * formula will be destroyed. This script only reads Supplier_URL display text
- * for dedup matching; it never writes back to that column.
+ * Each Images row is a distinct image (no cross-row dedup — a product reused across
+ * bundles is a single Material_Key with its images recorded once). Transcoding is
+ * done in PNGTools, not here; this records whatever format the file already is.
  */
-function syncMaterialAssets() {
-  const ss      = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet   = ss.getSheetByName('Supplier');
+function syncImageAssets() {
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(IMAGES_SHEET);
+  if (!sheet) {
+    ss.toast(`No "${IMAGES_SHEET}" tab. Run "Seed Images from Supplier" first.`, 'Sync Image Assets');
+    return;
+  }
   const lastRow = sheet.getLastRow();
-  if (lastRow < 2) { ss.toast('No data rows found.', 'Step 2'); return; }
+  if (lastRow < 2) { ss.toast('No image rows found.', 'Sync Image Assets'); return; }
 
   const colMap = getColMap_(sheet);
-  const REQUIRED = ['Supplier', 'Product_Name', 'Supplier_URL', 'File_ID', 'Drive_URL', 'Filename', 'Sync_Status'];
-  if (!validateCols_(colMap, REQUIRED, 'Step 2')) return;
+  const REQUIRED = ['Material_Key', 'Image_Type', 'File_ID', 'Drive_URL', 'Filename',
+                    'Format', 'Width_px', 'Height_px', 'Sync_Status'];
+  if (!validateCols_(colMap, REQUIRED, 'Sync Image Assets')) return;
 
   const numDataRows = lastRow - 1;
   const numCols     = sheet.getLastColumn();
+  const values      = sheet.getRange(2, 1, numDataRows, numCols).getValues();
 
-  // Read all columns at once.
-  // Supplier_URL (col C or wherever) returns display text via getValues() — safe to
-  // read for dedup matching, never written back.
-  const values = sheet.getRange(2, 1, numDataRows, numCols).getValues();
-
-  // Resolve 1-based column positions for output writes
   const FILE_ID_COL     = colMap['File_ID']     + 1;
   const DRIVE_URL_COL   = colMap['Drive_URL']   + 1;
-  const FILENAME_COL    = colMap['Filename']     + 1;
+  const FILENAME_COL    = colMap['Filename']    + 1;
+  const FORMAT_COL      = colMap['Format']      + 1;
+  const WIDTH_COL       = colMap['Width_px']    + 1;
+  const HEIGHT_COL      = colMap['Height_px']   + 1;
   const SYNC_STATUS_COL = colMap['Sync_Status'] + 1;
 
-  // Seed output arrays from existing values (unchanged rows keep their data)
-  const outFileId     = values.map(row => [String(row[colMap['File_ID']])    .trim()]);
-  const outDriveUrl   = values.map(row => [String(row[colMap['Drive_URL']])  .trim()]);
-  const outFilename   = values.map(row => [String(row[colMap['Filename']])   .trim()]);
-  const outSyncStatus = Array.from({ length: numDataRows }, () => ['']); // cleared each run
+  // Seed outputs from existing values; unchanged rows keep their data.
+  const outFileId = values.map(r => [String(r[colMap['File_ID']]).trim()]);
+  const outDrive  = values.map(r => [String(r[colMap['Drive_URL']]).trim()]);
+  const outName   = values.map(r => [String(r[colMap['Filename']]).trim()]);
+  const outFormat = values.map(r => [String(r[colMap['Format']]).trim()]);
+  const outWidth  = values.map(r => [r[colMap['Width_px']]]);
+  const outHeight = values.map(r => [r[colMap['Height_px']]]);
+  const outStatus = Array.from({ length: numDataRows }, () => ['']); // cleared each run
 
   const materialsFolder = DriveApp.getFolderById(MATERIALS_FOLDER_ID);
+  const seqCount = {}; // (Material_Key|Image_Type) → running count for -n suffixing
 
-  // ── PRE-PASS: propagate existing Drive data to rows sharing the same Supplier_URL display text ──
-  const urlFillMap = {};
-  for (let i = 0; i < numDataRows; i++) {
-    const fileId   = String(values[i][colMap['File_ID']])    .trim();
-    const driveUrl = String(values[i][colMap['Drive_URL']])  .trim();
-    const filename = String(values[i][colMap['Filename']])   .trim();
-    const urlText  = String(values[i][colMap['Supplier_URL']]).trim().toLowerCase();
-    if (fileId && urlText && !urlFillMap[urlText]) {
-      urlFillMap[urlText] = { fileId, driveUrl, filename };
-    }
-  }
-  let prefilled = 0;
-  for (let i = 0; i < numDataRows; i++) {
-    if (String(values[i][colMap['File_ID']]).trim()) continue; // already has File_ID
-    const urlText = String(values[i][colMap['Supplier_URL']]).trim().toLowerCase();
-    if (urlText && urlFillMap[urlText]) {
-      const fill = urlFillMap[urlText];
-      values[i][colMap['File_ID']]   = fill.fileId;
-      values[i][colMap['Drive_URL']] = fill.driveUrl;
-      values[i][colMap['Filename']]  = fill.filename;
-      prefilled++;
-    }
-  }
-
-  // Dedup map built progressively — ensures every file is renamed to current canonical convention
-  const dedupMap = {};
-  let processed = 0, deduped = 0, skipped = 0, errors = 0;
+  let processed = 0, skipped = 0, errors = 0;
 
   for (let i = 0; i < numDataRows; i++) {
-    const supplier       = String(values[i][colMap['Supplier']])    .trim();
-    const product        = String(values[i][colMap['Product_Name']]).trim();
-    const existingFileId  = String(values[i][colMap['File_ID']])    .trim();
-    const existingDriveUrl = String(values[i][colMap['Drive_URL']]) .trim();
+    const materialKey = String(values[i][colMap['Material_Key']]).trim();
+    const imageType   = String(values[i][colMap['Image_Type']]).trim();
+    const driveUrl    = String(values[i][colMap['Drive_URL']]).trim();
+    const fileId      = String(values[i][colMap['File_ID']]).trim();
 
-    if (!supplier || !product) { skipped++; continue; }
+    if (!materialKey || !imageType) { skipped++; continue; }
 
-    const key      = dedupKey(supplier, product);
-    const basename = canonicalBasename(supplier, product);
+    const groupKey = `${materialKey}|${imageType}`;
+    seqCount[groupKey] = (seqCount[groupKey] || 0) + 1;
+    const seq = seqCount[groupKey];
 
-    // Same Supplier+Product already handled this run → propagate
-    if (dedupMap[key]) {
-      const asset        = dedupMap[key];
-      outFileId[i][0]     = asset.fileId;
-      outDriveUrl[i][0]   = asset.driveUrl;
-      outFilename[i][0]   = asset.filename;
-      outSyncStatus[i][0] = 'Synced (shared): ' + timestamp();
-      deduped++;
-      continue;
-    }
-
-    // Resolve file: try Drive_URL first, then File_ID
     let file = null;
     try {
-      if (existingDriveUrl) file = resolveFile(existingDriveUrl, materialsFolder);
-      if (!file && existingFileId) file = DriveApp.getFileById(existingFileId);
+      if (driveUrl) file = resolveFile(driveUrl, materialsFolder);
+      if (!file && fileId) file = DriveApp.getFileById(fileId);
     } catch (e) {
-      outSyncStatus[i][0] = '⚠ Resolve error: ' + e.message;
+      outStatus[i][0] = '⚠ Resolve error: ' + e.message;
       errors++;
       continue;
     }
-
     if (!file) {
-      outSyncStatus[i][0] = '⚠ No file found — paste a Drive URL or path into the Drive_URL column';
+      outStatus[i][0] = '⚠ No file — paste a Drive URL/path into Drive_URL';
       skipped++;
       continue;
     }
 
     try {
       const currentName = file.getName();
-      const ext         = currentName.includes('.') ? currentName.split('.').pop() : 'jpg';
-      const canonical   = `${basename}.${ext}`;
-
+      const ext         = extOf_(currentName);
+      const canonical   = `${canonicalImageBasename_(materialKey, imageType, seq)}.${ext}`;
       if (currentName !== canonical) file.setName(canonical);
       ensureInFolder(file, materialsFolder);
 
-      const asset = { fileId: file.getId(), driveUrl: file.getUrl(), filename: canonical };
-      dedupMap[key] = asset;
+      let dims = null;
+      try { dims = getImageDimensions_(file.getId()); } catch (_) { dims = null; }
 
-      outFileId[i][0]     = asset.fileId;
-      outDriveUrl[i][0]   = asset.driveUrl;
-      outFilename[i][0]   = asset.filename;
-      outSyncStatus[i][0] = 'Synced: ' + timestamp();
+      outFileId[i][0] = file.getId();
+      outDrive[i][0]  = file.getUrl();
+      outName[i][0]   = canonical;
+      outFormat[i][0] = ext;
+      if (dims) { outWidth[i][0] = dims.w; outHeight[i][0] = dims.h; }
+      outStatus[i][0] = 'Synced: ' + timestamp();
       processed++;
-
     } catch (e) {
-      outSyncStatus[i][0] = '⚠ Error: ' + e.message;
+      outStatus[i][0] = '⚠ Error: ' + e.message;
       errors++;
     }
   }
 
-  // Write each output column independently — safe regardless of column order
   sheet.getRange(2, FILE_ID_COL,     numDataRows, 1).setValues(outFileId);
-  sheet.getRange(2, DRIVE_URL_COL,   numDataRows, 1).setValues(outDriveUrl);
-  sheet.getRange(2, FILENAME_COL,    numDataRows, 1).setValues(outFilename);
-  sheet.getRange(2, SYNC_STATUS_COL, numDataRows, 1).setValues(outSyncStatus);
+  sheet.getRange(2, DRIVE_URL_COL,   numDataRows, 1).setValues(outDrive);
+  sheet.getRange(2, FILENAME_COL,    numDataRows, 1).setValues(outName);
+  sheet.getRange(2, FORMAT_COL,      numDataRows, 1).setValues(outFormat);
+  sheet.getRange(2, WIDTH_COL,       numDataRows, 1).setValues(outWidth);
+  sheet.getRange(2, HEIGHT_COL,      numDataRows, 1).setValues(outHeight);
+  sheet.getRange(2, SYNC_STATUS_COL, numDataRows, 1).setValues(outStatus);
 
   ss.toast(
-    `Processed: ${processed}  |  Shared (dedup): ${deduped}  |  Pre-filled (same URL): ${prefilled}  |  Skipped: ${skipped}  |  Errors: ${errors}`,
-    'Step 2 Complete', 12
+    `Processed: ${processed}  |  Skipped: ${skipped}  |  Errors: ${errors}`,
+    'Sync Image Assets', 12
   );
 }
 
 // ── STEP 3 ───────────────────────────────────────────────────────────────────
 
 /**
- * Exports the Supplier sheet to bundles_library.json in the Interior Design
- * Bundles Drive folder. Schema:
+ * Exports Supplier (material/bundle data) joined with Images (by Material_Key) to
+ * bundles_library.json. Schema 1.2:
  *
- *   { _meta, bundles: [ { name, materials: [ { category, supplier,
- *     product_name, product_size, product_url, drive_file_id,
- *     drive_url, filename } ] } ] }
+ *   { _meta, hardware, bundles: [ { name, materials: [ {
+ *       category, supplier, product_name, product_size, product_url, material_key,
+ *       images: [ { type, file_id, drive_url, filename, format, width, height,
+ *                   vscale, hscale, source_url } ]
+ *   } ] } ] }
  *
- * product_url is extracted from the =HYPERLINK() formula in Supplier_URL.
- * sync_status is intentionally omitted — it's internal GSheet bookkeeping.
- * If a file already exists in the target folder it is trashed before writing.
+ * product_url is extracted from the =HYPERLINK() formula in Supplier_URL. The old
+ * single-image fields on the material row are gone — images live under images[].
  */
 function exportToJson() {
-  const ss      = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet   = ss.getSheetByName('Supplier');
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) { ss.toast('No data rows found.', 'Step 3'); return; }
+  const ss       = SpreadsheetApp.getActiveSpreadsheet();
+  const supplier = ss.getSheetByName(SUPPLIER_SHEET);
+  if (!supplier) { ss.toast(`No "${SUPPLIER_SHEET}" tab found.`, 'Step 3'); return; }
+  const sLast = supplier.getLastRow();
+  if (sLast < 2) { ss.toast('No Supplier rows.', 'Step 3'); return; }
 
-  const colMap = getColMap_(sheet);
-  const REQUIRED = ['Design_Bundle', 'Category', 'Supplier_URL', 'Supplier',
-                    'Product_Name', 'Product_Size', 'File_ID', 'Drive_URL', 'Filename'];
-  if (!validateCols_(colMap, REQUIRED, 'Step 3')) return;
+  const sCol = getColMap_(supplier);
+  const REQUIRED = ['Design_Bundle', 'Category', 'Supplier_URL', 'Supplier', 'Product_Name', 'Product_Size'];
+  if (!validateCols_(sCol, REQUIRED, 'Step 3')) return;
 
-  const numDataRows = lastRow - 1;
-  const numCols     = sheet.getLastColumn();
+  const numRows = sLast - 1;
+  const sVals   = supplier.getRange(2, 1, numRows, supplier.getLastColumn()).getValues();
+  const sForm   = supplier.getRange(2, sCol['Supplier_URL'] + 1, numRows, 1).getFormulas();
 
-  const values   = sheet.getRange(2, 1, numDataRows, numCols).getValues();
-  const formulas = sheet.getRange(2, colMap['Supplier_URL'] + 1, numDataRows, 1).getFormulas();
+  const imageIndex = buildImageIndex_(); // Material_Key → [ image, … ]
 
   const BUNDLE_ORDER = ['Subway', 'Harbor', 'Navy', 'Olive', 'Antique', 'Villa'];
   const bundleMap    = {};
   BUNDLE_ORDER.forEach(name => { bundleMap[name] = { name, materials: [] }; });
 
-  for (let i = 0; i < numDataRows; i++) {
-    const bundle   = String(values[i][colMap['Design_Bundle']]).trim();
-    const category = String(values[i][colMap['Category']]).trim();
+  for (let i = 0; i < numRows; i++) {
+    const bundle   = String(sVals[i][sCol['Design_Bundle']]).trim();
+    const category = String(sVals[i][sCol['Category']]).trim();
     if (!bundle || !category) continue;
 
-    // Extract product URL from =HYPERLINK("url","text") formula
     let productUrl = null;
-    const formula  = formulas[i][0];
+    const formula  = sForm[i][0];
     if (formula) {
       const m = formula.match(/HYPERLINK\("([^"]+)"/i);
       if (m) productUrl = m[1];
     }
 
+    const supplierName = String(sVals[i][sCol['Supplier']]).trim();
+    const productName  = String(sVals[i][sCol['Product_Name']]).trim();
+    const materialKey  = (supplierName && productName) ? canonicalBasename(supplierName, productName) : '';
+
     const material = {
       category:      category,
-      supplier:      String(values[i][colMap['Supplier']])    .trim() || null,
-      product_name:  String(values[i][colMap['Product_Name']]).trim() || null,
-      product_size:  String(values[i][colMap['Product_Size']]).trim() || null,
+      supplier:      supplierName || null,
+      product_name:  productName || null,
+      product_size:  String(sVals[i][sCol['Product_Size']]).trim() || null,
       product_url:   productUrl,
-      drive_file_id: String(values[i][colMap['File_ID']])    .trim() || null,
-      drive_url:     String(values[i][colMap['Drive_URL']])  .trim() || null,
-      filename:      String(values[i][colMap['Filename']])   .trim() || null,
+      material_key:  materialKey || null,
+      images:        (materialKey && imageIndex[materialKey]) ? imageIndex[materialKey] : [],
     };
 
     if (!bundleMap[bundle]) bundleMap[bundle] = { name: bundle, materials: [] };
@@ -383,7 +471,7 @@ function exportToJson() {
     _meta: {
       last_sync:      new Date().toISOString(),
       source:         ss.getName(),
-      schema_version: '1.1',
+      schema_version: SCHEMA_VERSION,
     },
     hardware: HARDWARE_FINISHES,
     bundles,
@@ -395,40 +483,75 @@ function exportToJson() {
   folder.createFile(BUNDLES_JSON_NAME, JSON.stringify(output, null, 2), MimeType.PLAIN_TEXT);
 
   const totalMaterials = bundles.reduce((n, b) => n + b.materials.length, 0);
+  const totalImages    = bundles.reduce((n, b) => n + b.materials.reduce((m, x) => m + x.images.length, 0), 0);
   ss.toast(
-    `Exported ${bundles.length} bundles · ${totalMaterials} materials → ${BUNDLES_JSON_NAME}`,
+    `Exported ${bundles.length} bundles · ${totalMaterials} materials · ${totalImages} images → ${BUNDLES_JSON_NAME}`,
     'Step 3 Complete', 8
   );
 }
 
-// ── Mood Board — moved to Moodboard/MoodBoard.js (gslides-bound script) ──────
-// Script ID: 1mAkLKNGRybcALsujtsPHNz4aYxViOEfUygH3ZNYPC9qHZvi9_CLMTViS
+/**
+ * Reads the Images tab and returns { Material_Key: [ imageObject, … ] }.
+ * Returns {} when the tab is absent or empty.
+ */
+function buildImageIndex_() {
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(IMAGES_SHEET);
+  const index = {};
+  if (!sheet) return index;
+  const last = sheet.getLastRow();
+  if (last < 2) return index;
+
+  const col = getColMap_(sheet);
+  if (col['Material_Key'] === undefined || col['Image_Type'] === undefined) return index;
+
+  const vals = sheet.getRange(2, 1, last - 1, sheet.getLastColumn()).getValues();
+  const num = (v) => (v === '' || v === null) ? null : Number(v);
+  const str = (v) => { const s = String(v == null ? '' : v).trim(); return s || null; };
+
+  vals.forEach(r => {
+    const key = String(r[col['Material_Key']]).trim();
+    if (!key) return;
+    const img = {
+      type:       str(r[col['Image_Type']]),
+      file_id:    col['File_ID']    !== undefined ? str(r[col['File_ID']])    : null,
+      drive_url:  col['Drive_URL']  !== undefined ? str(r[col['Drive_URL']])  : null,
+      filename:   col['Filename']   !== undefined ? str(r[col['Filename']])   : null,
+      format:     col['Format']     !== undefined ? str(r[col['Format']])     : null,
+      width:      col['Width_px']   !== undefined ? num(r[col['Width_px']])   : null,
+      height:     col['Height_px']  !== undefined ? num(r[col['Height_px']])  : null,
+      vscale:     col['VScale']     !== undefined ? num(r[col['VScale']])     : null,
+      hscale:     col['HScale']     !== undefined ? num(r[col['HScale']])     : null,
+      source_url: col['Source_URL'] !== undefined ? str(r[col['Source_URL']]) : null,
+    };
+    (index[key] = index[key] || []).push(img);
+  });
+  return index;
+}
 
 // ── Compute Scales ────────────────────────────────────────────────────────────
 
 /**
- * For each Supplier row where File_ID is set and exactly one of VScale/HScale
- * is filled, computes the missing value using the image's native aspect ratio:
+ * For each Images row of type Material_Image where File_ID is set and exactly one
+ * of VScale/HScale is filled, computes the missing value from the image's native
+ * aspect ratio:
  *
  *   HScale = VScale × (nativeW / nativeH)
  *   VScale = HScale / (nativeW / nativeH)
  *
- * Assumes the image is an orthographic swatch framing the full material region
- * uniformly (no crop / perspective). Values are read by MoodBoard.js and fed
- * into Architextures (https://architextures.org) for accurate texture tiling.
- *
- * Rows with both scales set or neither set are left alone. Image dimensions
- * are parsed from the file's header bytes (JPEG + PNG supported) — no Drive
- * advanced service required.
+ * VScale/HScale apply to Material_Image only (proportional texture tiling — fed to
+ * Architextures / Mood Board). Rows with both or neither set are left alone. Image
+ * dimensions are parsed from header bytes (JPEG + PNG).
  */
 function computeMissingScales() {
-  const ss      = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet   = ss.getSheetByName('Supplier');
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(IMAGES_SHEET);
+  if (!sheet) { ss.toast(`No "${IMAGES_SHEET}" tab found.`, 'Scales'); return; }
   const lastRow = sheet.getLastRow();
-  if (lastRow < 2) { ss.toast('No data rows found.', 'Scales'); return; }
+  if (lastRow < 2) { ss.toast('No image rows found.', 'Scales'); return; }
 
   const colMap = getColMap_(sheet);
-  if (!validateCols_(colMap, ['File_ID', 'VScale', 'HScale'], 'Compute Scales')) return;
+  if (!validateCols_(colMap, ['Image_Type', 'File_ID', 'VScale', 'HScale'], 'Compute Scales')) return;
 
   const numDataRows = lastRow - 1;
   const numCols     = sheet.getLastColumn();
@@ -442,6 +565,7 @@ function computeMissingScales() {
   let computed = 0;
 
   for (let i = 0; i < numDataRows; i++) {
+    if (String(values[i][colMap['Image_Type']]).trim() !== 'Material_Image') continue;
     const fileId = String(values[i][colMap['File_ID']]).trim();
     if (!fileId) continue;
 
@@ -525,13 +649,14 @@ function round2_(n) { return Math.round(n * 100) / 100; }
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
 /**
- * Compares the Materials Drive folder against the Filename column of the
- * Supplier sheet. Reports any files in Drive that are NOT referenced by the
- * sheet (orphans). Prompts to trash them after showing the list.
+ * Compares the Materials Drive folder against the Filename column of the Images
+ * tab. Reports any files in Drive that are NOT referenced by the sheet (orphans).
+ * Prompts to trash them after showing the list.
  */
 function auditMaterialsFolder() {
   const ui     = SpreadsheetApp.getUi();
-  const sheet  = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Supplier');
+  const sheet  = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(IMAGES_SHEET);
+  if (!sheet) { ui.alert('Audit', `No "${IMAGES_SHEET}" tab found.`, ui.ButtonSet.OK); return; }
   const lastRow = sheet.getLastRow();
 
   const colMap = getColMap_(sheet);
@@ -559,14 +684,14 @@ function auditMaterialsFolder() {
   }
 
   if (orphans.length === 0) {
-    ui.alert('Audit Complete', '✓ No orphaned files — Materials folder matches the sheet exactly.', ui.ButtonSet.OK);
+    ui.alert('Audit Complete', '✓ No orphaned files — Materials folder matches the Images tab exactly.', ui.ButtonSet.OK);
     return;
   }
 
   const list    = orphans.map(o => `  • ${o.name}`).join('\n');
   const confirm = ui.alert(
     `Audit: ${orphans.length} orphaned file(s) found`,
-    `These files are in the Materials folder but not referenced in the Supplier sheet:\n\n${list}\n\nMove them to Trash?`,
+    `These files are in the Materials folder but not referenced in the Images tab:\n\n${list}\n\nMove them to Trash?`,
     ui.ButtonSet.YES_NO
   );
 
@@ -610,7 +735,7 @@ function validateCols_(colMap, required, contextName) {
   if (missing.length === 0) return true;
   SpreadsheetApp.getUi().alert(
     contextName + ' — Missing Column(s)',
-    'The following headers were not found in row 1 of the Supplier sheet:\n\n  ' +
+    'The following headers were not found in row 1:\n\n  ' +
     missing.join(', ') +
     '\n\nCheck that row 1 contains the exact header names listed above.',
     SpreadsheetApp.getUi().ButtonSet.OK
@@ -665,18 +790,33 @@ function ensureInFolder(file, targetFolder) {
   });
 }
 
-function dedupKey(supplier, product) {
-  return `${supplier.trim().toUpperCase()}|${product.trim().toUpperCase()}`;
-}
-
 /**
- * Canonical basename:  "Republic Floor" + "Sharc North Forest"
- *                    → "RepublicFloor_Sharc-North-Forest"
+ * Canonical material key / basename:
+ *   "Republic Floor" + "Sharc North Forest" → "RepublicFloor_Sharc-North-Forest"
  */
 function canonicalBasename(supplier, product) {
   const s = supplier.trim().replace(/\s+/g, '');
   const p = product.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9\-]/g, '').replace(/-+/g, '-');
   return `${s}_${p}`;
+}
+
+/**
+ * Canonical image basename:  {Material_Key}__{type}[-{n}]
+ *   ("RepublicFloor_Verona-Light", "Material_Image", 1) → "RepublicFloor_Verona-Light__material"
+ *   (…, "Showcase_Image", 2)                            → "…__showcase-2"
+ */
+function canonicalImageBasename_(materialKey, imageType, seq) {
+  const token = IMAGE_TYPE_TOKENS[imageType] ||
+    String(imageType).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') ||
+    'image';
+  const suffix = (seq && seq > 1) ? `-${seq}` : '';
+  return `${materialKey}__${token}${suffix}`;
+}
+
+/** Lowercase file extension (no dot), defaulting to 'jpg'. */
+function extOf_(filename) {
+  const n = String(filename || '');
+  return n.includes('.') ? n.split('.').pop().toLowerCase() : 'jpg';
 }
 
 function timestamp() {
@@ -689,6 +829,7 @@ function formatActiveSheetColumns() {
   const colMap = getColMap_(sheet);
   if (colMap['Supplier_URL'] !== undefined) sheet.setColumnWidth(colMap['Supplier_URL'] + 1, 250);
   if (colMap['Drive_URL']    !== undefined) sheet.setColumnWidth(colMap['Drive_URL']    + 1, 250);
+  if (colMap['Source_URL']   !== undefined) sheet.setColumnWidth(colMap['Source_URL']   + 1, 250);
 }
 
 // ── Debug (run from Apps Script editor) ──────────────────────────────────────
