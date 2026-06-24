@@ -161,7 +161,103 @@ downstream consumers today.
 
 ---
 
-## 7. Cross-References
+## 7. Image Assets Model (proposed — schema 1.2)
+
+> Status: **PROPOSED.** Replaces the single-image fields on the material row
+> (`File_ID` / `Drive_URL` / `Filename`) with a dedicated **`Images` tab**, because a
+> material can have several images of different *types*, each with its own specs.
+
+### Why a separate tab (not more columns)
+
+A material has a **1-to-many** relationship with images — e.g. a `Material_Image`
+swatch *and* a `Showcase_Image` of the installed product — and some specs are
+meaningful only for certain types. A flat row can't hold that without parallel column
+sets (`MaterialImg_*`, `ShowcaseImg_*`, …) that grow with every new type. Product reuse
+across bundles (measured: 30 unique products across 36 rows) also means a shared
+product's images are recorded **once**, keyed by the canonical product key — not copied
+per bundle.
+
+Note: at current scale the *material* data stays flat (one row per bundle×category);
+only **images** are normalized out, because images are the only genuinely 1-to-many,
+type-attributed dimension. Full material/bundle normalization is deferred until product
+reuse makes spec-drift a real cost.
+
+**Decided against an in-sheet collector tab** (2026-06-24): `bundles_library.json` is
+already the joined/collected artifact for machine consumers, so a hand-built collector
+would only duplicate it and risk becoming a competing source of truth. Tabs are
+edit surfaces (sources of truth), each owning the columns functionally dependent on its
+key; the export is the join. Revisit only if in-sheet human browse/QA becomes a real need
+(then as a *generated* read-only view, never hand-edited).
+
+### `Images` tab columns
+
+| Column | Source | Purpose / rule |
+|--------|--------|----------------|
+| `Material_Key` | computed | FK to the material — the canonical `Supplier_Product-Name` slug (`canonicalBasename`), stable across bundles. |
+| `Image_Type` | manual | Controlled vocabulary: `Material_Image` \| `Showcase_Image` (extensible — see spec table). |
+| `Source_URL` | web / manual | Where the image was collected. Optional hyperlink. |
+| `Source_Format` | computed / manual | Original format as collected (`jpg` / `png` / `webp` …). Informational. |
+| `File_ID` | computed | Drive id of the canonical (normalized) image. |
+| `Drive_URL` | computed | Canonical Drive URL. |
+| `Filename` | computed | `{Material_Key}__{type}[-{n}].{ext}` — unique; disambiguates multiple images per material. **Row identity.** |
+| `Format` | computed | Canonical format after normalization (see below). |
+| `Width_px` / `Height_px` | computed | Measured native pixel dimensions (header read, as `getImageDimensions_` already does). |
+| `VScale` / `HScale` | computed / manual | Real-world inches for proportional tiling. **`Material_Image` only**; blank otherwise. |
+| `Sync_Status` | computed | Per-row bookkeeping / timestamp. |
+| `Notes` | manual | Freeform. |
+
+Row identity = `(Material_Key, Image_Type[, sequence])`, realized as the unique `Filename`.
+
+### Specs are measured objectively + documented per type (not type-locked columns)
+
+Resolution and quality are captured for **every** image (`Width_px` / `Height_px` /
+`Format`) — there is deliberately **no** "hi-res" flag tied to one type, because high
+resolution can matter for any image. *Which* specs matter for each type is a documented
+guideline, and this table is the place to extend it:
+
+| Image_Type | Use | Key specs of interest | Target (tune) |
+|------------|-----|-----------------------|---------------|
+| `Material_Image` | generate Revit material (pattern/color) + Mood Board scaling | `VScale`, `HScale`, resolution, flat/orthographic swatch, true color | hi-res (≥ ~1500px long edge) |
+| `Showcase_Image` | staged installed example (design ref + web gallery) | resolution, aspect ratio, scene context | hi-res (≥ ~1600px) |
+
+### Format normalization
+
+Images are collected from the web in mixed formats. Store a **single canonical master =
+PNG** (lossless, read by Revit / Slides / browsers, and convertible downstream) so every
+consumer gets a compatible asset. `Source_Format` records what was collected; `Format`
+records the canonical result.
+
+**Transcoding is NOT done in Apps Script** (it cannot reliably convert raster formats).
+Normalize with **PNGTools** (`PostProcess/PNGTools/core/image_conversion.py`, Batch Prep →
+Conversion subtab). Division of labor:
+
+1. Collect raw image(s) + `Source_URL` (manual / agentic).
+2. **PNGTools** → convert to canonical PNG, verify resolution.
+3. **`Code.js` Step 2 (extended)** → place in Materials folder; write `Filename`, `File_ID`,
+   `Drive_URL`, `Format`, `Width_px` / `Height_px`, `Sync_Status`.
+4. **`Code.js` Compute Scales (extended)** → `VScale` / `HScale` on `Material_Image` rows.
+
+### JSON export (schema 1.2)
+
+`exportToJson` nests images per material and **drops the old single-image fields**
+(Rule #6 — no parallel paths; the material's current `drive_file_id` / `drive_url` /
+`filename` migrate into a `Material_Image` entry):
+
+```json
+"images": [
+  { "type": "Material_Image", "file_id": "...", "drive_url": "...", "filename": "...",
+    "format": "png", "width": 2000, "height": 2000, "vscale": 48, "hscale": 24,
+    "source_url": "https://..." },
+  { "type": "Showcase_Image", "file_id": "...", "drive_url": "...", "filename": "...",
+    "format": "png", "width": 2400, "height": 1600, "source_url": "https://..." }
+]
+```
+
+Consumers filter by `type`: Revit/Architextures → `Material_Image` (+ scales);
+Web/Supabase → `Showcase_Image`; Mood Board → `Material_Image`. This mirrors WebCatalog's
+`adu_assets` variant-by-`media_key` pattern, easing later Supabase propagation.
+
+## 8. Cross-References
 
 - `Vault/wiki/curated/design-bundles.md` — what Design Bundles are + how Revit applies them
 - `Vault/wiki/auto/database-layer.md` — all databases & Apps Script projects
