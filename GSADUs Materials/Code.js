@@ -323,6 +323,7 @@ function syncImageAssets() {
   const outStatus = Array.from({ length: numDataRows }, () => ['']); // cleared each run
 
   const materialsFolder = DriveApp.getFolderById(MATERIALS_FOLDER_ID);
+  const folderIndex = buildMaterialsFolderIndex_(materialsFolder); // basename → live file
   const seqCount = {}; // (Material_Key|Image_Type) → running count for -n suffixing
 
   let processed = 0, skipped = 0, errors = 0;
@@ -338,11 +339,25 @@ function syncImageAssets() {
     const groupKey = `${materialKey}|${imageType}`;
     seqCount[groupKey] = (seqCount[groupKey] || 0) + 1;
     const seq = seqCount[groupKey];
+    const canonicalBase = canonicalImageBasename_(materialKey, imageType, seq);
 
     let file = null;
     try {
-      if (driveUrl) file = resolveFile(driveUrl, materialsFolder);
-      if (!file && fileId) file = DriveApp.getFileById(fileId);
+      // 1) Materials folder is authoritative — find the row's file by its
+      //    canonical basename among LIVE files (getFiles excludes trashed).
+      //    Self-heals rows whose stored File_ID/Drive_URL went stale, e.g. after
+      //    a PNGTools format conversion replaced the file.
+      file = folderIndex[canonicalBase.toLowerCase()] || null;
+      // 2) First-time registration only: a pasted Drive_URL/path or File_ID for
+      //    a file not yet canonically placed. Ignore trashed results.
+      if (!file && driveUrl) {
+        const f = resolveFile(driveUrl, materialsFolder);
+        if (f && !f.isTrashed()) file = f;
+      }
+      if (!file && fileId) {
+        const f = DriveApp.getFileById(fileId);
+        if (f && !f.isTrashed()) file = f;
+      }
     } catch (e) {
       outStatus[i][0] = '⚠ Resolve error: ' + e.message;
       errors++;
@@ -357,7 +372,7 @@ function syncImageAssets() {
     try {
       const currentName = file.getName();
       const ext         = extOf_(currentName);
-      const canonical   = `${canonicalImageBasename_(materialKey, imageType, seq)}.${ext}`;
+      const canonical   = `${canonicalBase}.${ext}`;
       if (currentName !== canonical) file.setName(canonical);
       ensureInFolder(file, materialsFolder);
 
@@ -798,6 +813,34 @@ function canonicalBasename(supplier, product) {
   const s = supplier.trim().replace(/\s+/g, '');
   const p = product.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9\-]/g, '').replace(/-+/g, '-');
   return `${s}_${p}`;
+}
+
+/**
+ * Builds { basename-without-ext (lowercased) : File } from the LIVE files in the
+ * Materials folder (getFiles excludes trashed files). When several live files
+ * share a basename, the canonical PNG wins. The Materials folder is the
+ * authoritative store for image bytes, so Sync uses this to relink rows whose
+ * stored File_ID/Drive_URL went stale (e.g. after a format conversion replaced
+ * the file and left the old id trashed-but-resolvable).
+ */
+function buildMaterialsFolderIndex_(folder) {
+  const index = {};
+  const iter = folder.getFiles();
+  while (iter.hasNext()) {
+    const f    = iter.next();
+    const name = f.getName();
+    const dot  = name.lastIndexOf('.');
+    const base = (dot > 0 ? name.slice(0, dot) : name).toLowerCase();
+    const ext  = (dot > 0 ? name.slice(dot + 1) : '').toLowerCase();
+    const existing = index[base];
+    if (!existing) {
+      index[base] = f;
+    } else {
+      const existingExt = existing.getName().split('.').pop().toLowerCase();
+      if (ext === 'png' && existingExt !== 'png') index[base] = f; // prefer canonical PNG
+    }
+  }
+  return index;
 }
 
 /**
