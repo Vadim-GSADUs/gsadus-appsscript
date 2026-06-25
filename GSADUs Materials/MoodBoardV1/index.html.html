@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design Bundles</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.22.20/babel.min.js"></script>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  </style>
+</head>
+<body class="bg-[#f8fafc] text-slate-800 antialiased overflow-hidden">
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useEffect, useRef } = React;
+
+    function LucideIcon({ name, size = 16, className = "" }) {
+      const iconRef = useRef(null);
+      useEffect(() => {
+        try {
+          if (iconRef.current && window.lucide && window.lucide.icons) {
+            iconRef.current.innerHTML = '';
+            const targetKey = Object.keys(window.lucide.icons).find(
+              key => key.toLowerCase() === name.toLowerCase()
+            );
+            const targetNode = targetKey ? window.lucide.icons[targetKey] : null;
+            if (targetNode) {
+              const svgElement = window.lucide.createSvg(targetNode, {
+                width: size,
+                height: size,
+                class: className
+              });
+              iconRef.current.appendChild(svgElement);
+            }
+          }
+        } catch (err) { console.error(err); }
+      }, [name, size, className]);
+      return <span ref={iconRef} className="inline-block align-middle line-height-0" />;
+    }
+
+    // ── Preview-only sample data ────────────────────────────────────────────────
+    // Used solely when there is no Apps Script backend (e.g. the static editor
+    // preview) so the layout still renders. NOT a source of truth — the deployed
+    // web app always fetches live data via getSheetData(). Shape matches the
+    // server projection: [{ row: headers }, { index_, row }, …].
+    const thumb = (id) => `https://drive.google.com/thumbnail?id=${id}&sz=w600`;
+    const driveView = (id) => `https://drive.google.com/file/d/${id}/view`;
+    // Stand-in showcase for preview only — no real Showcase_Image rows exist yet,
+    // so the Subway flooring reuses a swatch at hero size just to demo the panel.
+    const sampleShowcase = `https://drive.google.com/thumbnail?id=1AICPRZRgza0oC5blJzxuUYDxPqNN5gK_&sz=w1200`;
+    const SAMPLE_DATA = [
+      { row: ['design_bundle','category','supplier_url','supplier','product_name','product_size','vscale','hscale','file_id','drive_url','image','showcase'] },
+      { index_: 2,  row: ['Subway','Flooring','','Republic Floor','Verona Light','9.33x75 in','46.65','133.69','1AICPRZRgza0oC5blJzxuUYDxPqNN5gK_', driveView('1AICPRZRgza0oC5blJzxuUYDxPqNN5gK_'), thumb('1AICPRZRgza0oC5blJzxuUYDxPqNN5gK_'), sampleShowcase] },
+      { index_: 3,  row: ['Subway','Bathroom Floor Tile','','Roca','Nordico Snow UP 12x24','12x24 in','12','24','1W1shba1HTsyJfpQ8mKQfXaR7I7U26Jp9', driveView('1W1shba1HTsyJfpQ8mKQfXaR7I7U26Jp9'), thumb('1W1shba1HTsyJfpQ8mKQfXaR7I7U26Jp9'), ''] },
+      { index_: 4,  row: ['Subway','Shower Wall Tile','','Roca','Artesano - White Ice Bright 3x12','3x12 in','9','12','1UCjVUlDnjzMeEfwF8Q-Ep7QvfbZz5XoR', driveView('1UCjVUlDnjzMeEfwF8Q-Ep7QvfbZz5XoR'), thumb('1UCjVUlDnjzMeEfwF8Q-Ep7QvfbZz5XoR'), ''] },
+      { index_: 5,  row: ['Subway','Shower Pan Tile','','Roca','White Matte Penny','1 in','15','15','1eZe1Rp2X57GZ3MyBqx4FjEZVrEymxriM', driveView('1eZe1Rp2X57GZ3MyBqx4FjEZVrEymxriM'), thumb('1eZe1Rp2X57GZ3MyBqx4FjEZVrEymxriM'), ''] },
+      { index_: 6,  row: ['Subway','Kitchen Backsplash','','Roca','Artesano - White Ice Bright 3x12','3x12 in','9','12','1UCjVUlDnjzMeEfwF8Q-Ep7QvfbZz5XoR', driveView('1UCjVUlDnjzMeEfwF8Q-Ep7QvfbZz5XoR'), thumb('1UCjVUlDnjzMeEfwF8Q-Ep7QvfbZz5XoR'), ''] },
+      { index_: 7,  row: ['Subway','Cabinet Color','','Arich','Shaker White','','34','34','145CRTmPhStqYxJSQbd-2g7zid1SH6tXS', driveView('145CRTmPhStqYxJSQbd-2g7zid1SH6tXS'), thumb('145CRTmPhStqYxJSQbd-2g7zid1SH6tXS'), ''] },
+      { index_: 8,  row: ['Harbor','Flooring','','Republic Floor','Norwegian Rose','9.33x75 in','46.65','133.69','1plTx9zV86NYvY1G6pz7ctRxUnibgaFL8', driveView('1plTx9zV86NYvY1G6pz7ctRxUnibgaFL8'), thumb('1plTx9zV86NYvY1G6pz7ctRxUnibgaFL8'), ''] },
+    ];
+
+    function App() {
+      const [data, setData] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [loadError, setLoadError] = useState(null);
+      const [previewMode, setPreviewMode] = useState(false);
+      const [activeTab, setActiveTab] = useState('board');
+      const [activeBundle, setActiveBundle] = useState('');
+      const [searchQuery, setSearchQuery] = useState('');
+      const [catFilter, setCatFilter] = useState('All');
+      const [selectedItem, setSelectedItem] = useState(null);
+
+      useEffect(() => {
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          google.script.run
+            .withSuccessHandler((result) => {
+              if (result && result.length > 0) setData(result);
+              setLoading(false);
+            })
+            .withFailureHandler((err) => {
+              setLoadError((err && err.message) ? err.message : String(err));
+              setLoading(false);
+            })
+            .getSheetData();
+        } else {
+          // No Apps Script backend (e.g. the static editor preview, not the
+          // deployed /exec URL). Render the layout with sample data so the
+          // design is still reviewable; live data only flows in the web app.
+          setData(SAMPLE_DATA);
+          setPreviewMode(true);
+          setLoading(false);
+        }
+      }, []);
+
+      const rawHeaders = data[0]?.row || [];
+      const cleanHeaders = useMemo(() => rawHeaders.map(h => String(h).trim().toLowerCase()), [rawHeaders]);
+
+      const designBundleIdx = cleanHeaders.indexOf("design_bundle");
+      const categoryIdx = cleanHeaders.indexOf("category");
+      const supplierUrlIdx = cleanHeaders.indexOf("supplier_url");
+      const supplierIdx = cleanHeaders.indexOf("supplier");
+      const productNameIdx = cleanHeaders.indexOf("product_name");
+      const productSizeIdx = cleanHeaders.indexOf("product_size");
+      const vScaleIdx = cleanHeaders.indexOf("vscale");
+      const hScaleIdx = cleanHeaders.indexOf("hscale");
+      const fileIdIdx = cleanHeaders.indexOf("file_id");
+      const driveUrlIdx = cleanHeaders.indexOf("drive_url");
+      const imageIdx = cleanHeaders.indexOf("image");
+      const showcaseIdx = cleanHeaders.indexOf("showcase");
+
+      const rowsData = useMemo(() => data.filter((item, i) => i > 0 && item.row && item.row.length > 0), [data]);
+
+      const uniqueBundles = useMemo(() => {
+        const set = new Set();
+        rowsData.forEach(item => { const val = item.row[designBundleIdx]; if (val) set.add(val); });
+        return Array.from(set).sort();
+      }, [rowsData, designBundleIdx]);
+
+      const uniqueCategories = useMemo(() => {
+        const set = new Set();
+        rowsData.forEach(item => { const val = item.row[categoryIdx]; if (val) set.add(val); });
+        return Array.from(set).sort();
+      }, [rowsData, categoryIdx]);
+
+      useEffect(() => {
+        if (uniqueBundles.length > 0 && !activeBundle) {
+          setActiveBundle(uniqueBundles[0]);
+        }
+      }, [uniqueBundles]);
+
+      const currentBundle = uniqueBundles.includes(activeBundle) ? activeBundle : (uniqueBundles[0] || '');
+      const bundleMaterials = useMemo(() => rowsData.filter(item => item.row[designBundleIdx] === currentBundle), [rowsData, currentBundle, designBundleIdx]);
+
+      useEffect(() => {
+        if (bundleMaterials.length > 0) {
+          setSelectedItem(bundleMaterials[0]);
+        } else {
+          setSelectedItem(null);
+        }
+      }, [currentBundle]);
+
+      // Active bundle's materials, ordered for the mood-board grid. Unknown
+      // categories sort to the end (still shown).
+      const CATEGORY_ORDER = ['flooring', 'shower wall', 'backsplash', 'bathroom floor', 'shower pan', 'cabinet'];
+      const orderedMaterials = useMemo(() => {
+        const rank = (cat) => {
+          const lc = (cat || '').toLowerCase();
+          const i = CATEGORY_ORDER.findIndex(k => lc.includes(k));
+          return i === -1 ? CATEGORY_ORDER.length : i;
+        };
+        return [...bundleMaterials].sort((a, b) => rank(a.row[categoryIdx]) - rank(b.row[categoryIdx]));
+      }, [bundleMaterials, categoryIdx]);
+
+      const sortedCatalog = useMemo(() => {
+        let filtered = rowsData;
+        if (searchQuery) {
+          const q = searchQuery.toLowerCase();
+          filtered = filtered.filter(item => (item.row[productNameIdx] || '').toLowerCase().includes(q) || (item.row[categoryIdx] || '').toLowerCase().includes(q));
+        }
+        if (catFilter !== 'All') filtered = filtered.filter(item => item.row[categoryIdx] === catFilter);
+        return filtered;
+      }, [rowsData, searchQuery, catFilter, productNameIdx, categoryIdx]);
+
+      const getMaterialImage = (row) => {
+        if (imageIdx !== -1 && row[imageIdx]) return row[imageIdx];
+        if (fileIdIdx !== -1 && row[fileIdIdx]) return `https://drive.google.com/thumbnail?id=${row[fileIdIdx]}&sz=w600`;
+        return null;
+      };
+
+      if (loading) {
+        return (
+          <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white gap-3">
+            <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-xs font-mono uppercase tracking-widest text-slate-400">Design Bundles Syncing...</p>
+          </div>
+        );
+      }
+
+      if (loadError) {
+        return (
+          <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white gap-3 p-8 text-center">
+            <LucideIcon name="alert-triangle" size={28} className="text-amber-400" />
+            <p className="text-sm font-black uppercase tracking-widest">Dashboard could not load</p>
+            <p className="text-xs font-mono text-slate-400 max-w-md leading-relaxed">{loadError}</p>
+          </div>
+        );
+      }
+
+      return (
+        <div className="h-screen w-screen flex flex-col overflow-hidden">
+          
+          <header className="h-14 bg-white border-b border-slate-200 flex-shrink-0 flex items-center justify-between px-6 z-10">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-full bg-slate-950 flex items-center justify-center text-white text-xs font-black">D</div>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <h1 className="text-sm font-black tracking-tight text-slate-900 uppercase">Design Bundles</h1>
+                  <span className="text-[9px] font-bold bg-slate-100 px-1 rounded text-slate-500">v2.4</span>
+                  {previewMode && <span className="text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 rounded uppercase tracking-wide">Preview · sample data</span>}
+                </div>
+                <p className="text-[10px] text-slate-400 font-medium">Curated Design Bundles Moodboard Explorer</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-4 text-xs font-bold text-slate-500">
+              <div className="bg-slate-50 border border-slate-100 rounded-lg px-2.5 py-1 flex gap-2">
+                <span>MATERIAL SPECS: <span className="text-slate-900">{rowsData.length}</span></span>
+                <span className="text-slate-200">|</span>
+                <span>THEMES: <span className="text-indigo-600">{uniqueBundles.length}</span></span>
+              </div>
+            </div>
+          </header>
+
+          <div className="flex-1 flex overflow-hidden">
+            
+            <aside className="w-56 bg-white border-r border-slate-200 p-4 flex flex-col justify-between flex-shrink-0 overflow-y-auto">
+              <div className="space-y-4">
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block font-mono">Design Themes</span>
+                <nav className="space-y-1">
+                  {uniqueBundles.map(bundle => (
+                    <button
+                      key={bundle}
+                      onClick={() => setActiveBundle(bundle)}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-xs font-bold rounded-lg transition ${
+                        currentBundle === bundle ? 'bg-slate-100 text-slate-900 shadow-2xs' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`w-1.5 h-1.5 rounded-full ${currentBundle === bundle ? 'bg-indigo-600' : 'bg-slate-300'}`}></span>
+                        <span>{bundle}</span>
+                      </div>
+                      {currentBundle === bundle && <LucideIcon name="check" size={12} className="text-indigo-600" />}
+                    </button>
+                  ))}
+                </nav>
+              </div>
+            </aside>
+
+            <main className="flex-1 bg-[#f8fafc] p-6 overflow-y-auto flex flex-col">
+              
+              <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 flex-shrink-0">
+                <div>
+                  <h2 className="text-xl font-black tracking-tight text-slate-900">{currentBundle} Design Palette</h2>
+                </div>
+                
+                <div className="bg-slate-200/60 p-1 rounded-xl flex border border-slate-300/40 text-xs font-bold shadow-2xs">
+                  <button onClick={() => setActiveTab('board')} className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${activeTab === 'board' ? 'bg-white text-slate-950 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}>
+                    <LucideIcon name="CreativeCollage" size={14} /> Creative Collage
+                  </button>
+                  <button onClick={() => setActiveTab('catalog')} className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${activeTab === 'catalog' ? 'bg-white text-slate-950 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}>
+                    <LucideIcon name="List" size={14} /> Specification Table
+                  </button>
+                </div>
+              </div>
+
+              {activeTab === 'board' && (
+                <div className="space-y-5">
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                    {orderedMaterials.map(mat => (
+                      <div key={mat.index_} onClick={() => setSelectedItem(mat)} className={`bg-white rounded-2xl border overflow-hidden cursor-pointer shadow-2xs transition-all ${selectedItem === mat ? 'ring-2 ring-slate-950' : 'hover:border-slate-300 hover:shadow-md'}`}>
+                        <div className="aspect-square bg-slate-100 overflow-hidden">
+                          <img src={getMaterialImage(mat.row)} className="w-full h-full object-cover" onError={(e)=>{e.target.style.display='none'}} />
+                        </div>
+                        <div className="p-3.5">
+                          <span className="block text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">{mat.row[categoryIdx]}</span>
+                          <h4 className="font-bold text-slate-900 text-sm truncate mt-0.5">{mat.row[productNameIdx] || 'Unnamed'}</h4>
+                          <span className="block text-xs text-slate-400 font-medium truncate">{[mat.row[supplierIdx], mat.row[productSizeIdx]].filter(Boolean).join(' • ') || '—'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Installed showcase of the selected material */}
+                  <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">Installed Showcase</span>
+                      {selectedItem && (
+                        <span className="text-[10px] font-bold text-slate-500 truncate max-w-[60%] text-right">
+                          {selectedItem.row[categoryIdx]} · {selectedItem.row[productNameIdx]}
+                        </span>
+                      )}
+                    </div>
+                    {selectedItem && showcaseIdx !== -1 && selectedItem.row[showcaseIdx] ? (
+                      <div className="rounded-xl overflow-hidden bg-slate-100 border">
+                        <img src={selectedItem.row[showcaseIdx]} className="w-full max-h-[460px] object-cover" onError={(e)=>{e.target.style.display='none'}} />
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 h-56 flex flex-col items-center justify-center text-center px-6">
+                        <LucideIcon name="Image" size={22} className="text-slate-300 mb-2" />
+                        <p className="text-xs font-bold text-slate-500">{selectedItem ? 'No showcase image yet' : 'Select a material to see its installed example'}</p>
+                        {selectedItem && <p className="text-[11px] text-slate-400 mt-1">Add a Showcase_Image row for "{selectedItem.row[productNameIdx]}" in the Images tab.</p>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'catalog' && (
+                <div className="bg-white rounded-2xl border border-slate-200 flex-1 flex flex-col overflow-hidden shadow-2xs">
+                  <div className="p-3 bg-slate-50 border-b flex gap-2">
+                    <input type="text" placeholder="Filter specs dynamically..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="p-1.5 border rounded-xl bg-white text-xs max-w-xs w-full outline-none focus:ring-2 focus:ring-slate-400 font-medium" />
+                  </div>
+                  <div className="flex-1 overflow-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100/80 border-b text-slate-400 font-mono text-[9px] uppercase tracking-wider sticky top-0 bg-white">
+                          <th className="p-3.5 font-bold">Category Matrix Slot</th>
+                          <th className="p-3.5 font-bold">Product Specification Title</th>
+                          <th className="p-3.5 font-bold">Manufacturer Brand</th>
+                          <th className="p-3.5 font-bold">Size Schedule</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y font-medium text-slate-700">
+                        {sortedCatalog.map(item => (
+                          <tr key={item.index_} onClick={() => setSelectedItem(item)} className={`hover:bg-slate-50/60 cursor-pointer ${selectedItem === item ? 'bg-slate-50' : ''}`}>
+                            <td className="p-3.5"><span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-bold text-[10px] uppercase tracking-wider">{item.row[categoryIdx]}</span></td>
+                            <td className="p-3.5 font-extrabold text-slate-900">{item.row[productNameIdx]}</td>
+                            <td className="p-3.5 text-slate-500">{item.row[supplierIdx]}</td>
+                            <td className="p-3.5 font-mono text-slate-400">{item.row[productSizeIdx] || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+            </main>
+
+            <aside className="w-80 bg-white border-l border-slate-200 flex flex-col flex-shrink-0 overflow-y-auto">
+              {selectedItem ? (
+                <div className="p-4 flex flex-col h-full justify-between">
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-start border-b pb-3">
+                      <div>
+                        <span className="text-[8px] font-mono font-bold uppercase text-slate-400 tracking-widest">{selectedItem.row[categoryIdx]}</span>
+                        <h3 className="font-black text-slate-900 text-sm tracking-tight leading-tight mt-0.5">{selectedItem.row[productNameIdx]}</h3>
+                        <p className="text-[10px] text-indigo-600 font-bold font-mono uppercase mt-0.5">Bundle: {selectedItem.row[designBundleIdx]}</p>
+                      </div>
+                    </div>
+
+                    <div className="w-full aspect-square bg-slate-50 border rounded-xl overflow-hidden shadow-inner flex items-center justify-center">
+                      <img src={getMaterialImage(selectedItem.row)} className="w-full h-full object-cover" onError={(e)=>{e.target.style.display='none'}} />
+                    </div>
+
+                    <div className="bg-slate-50 rounded-xl border p-3 space-y-2.5 text-[11px] font-medium text-slate-600 shadow-2xs">
+                      <div className="flex justify-between"><span className="text-slate-400 font-mono text-[10px] uppercase">Supplier</span> <span className="font-bold text-slate-900 truncate max-w-[65%]">{selectedItem.row[supplierIdx] || '—'}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-400 font-mono text-[10px] uppercase">Size Schedule</span> <span className="font-bold text-slate-900 font-mono">{selectedItem.row[productSizeIdx] || '—'}</span></div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 pt-4 border-t border-slate-100 mt-6">
+                    {selectedItem.row[supplierUrlIdx] && (
+                      <button onClick={() => window.open(selectedItem.row[supplierUrlIdx], '_blank')} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2 text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5">
+                        <LucideIcon name="external-link" size={13} /> Visit Manufacturer Link
+                      </button>
+                    )}
+                    {selectedItem.row[driveUrlIdx] && (
+                      <button onClick={() => window.open(selectedItem.row[driveUrlIdx], '_blank')} className="w-full bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-bold py-2 text-xs rounded-xl shadow-2xs transition flex items-center justify-center gap-1.5">
+                        <LucideIcon name="file-text" size={13} className="text-slate-400" /> View Source Drive Asset
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-6 text-center text-slate-400 my-auto font-bold text-xs flex flex-col items-center gap-2">
+                  <LucideIcon name="layers" size={20} className="text-slate-300" />
+                  <span>Select a material card swatch to audit live specifications</span>
+                </div>
+              )}
+            </aside>
+
+          </div>
+
+        </div>
+      );
+    }
+
+    const appRootMountPoint = document.getElementById('root');
+    ReactDOM.createRoot(appRootMountPoint).render(<App />);
+  </script>
+</body>
+</html>

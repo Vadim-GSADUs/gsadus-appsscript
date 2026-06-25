@@ -28,6 +28,11 @@ const BUNDLES_FOLDER_ID   = '1v7vLPjvPdMA42wGA9XqC_29DNtZP21Gk'; // Interior Des
 const BUNDLES_JSON_NAME   = 'bundles_library.json';
 const SCHEMA_VERSION      = '1.2';
 
+// Standalone read-only Mood Board dashboard — a SEPARATE Apps Script web app
+// (source: AppsScript/GSADUs Materials/MoodBoardV1). Launched from the menu below.
+const MOODBOARD_WEBAPP_URL =
+  'https://script.google.com/macros/s/AKfycbxYJkXjXr2XqCP_lF7KEFgLAmwacFQgm_ZLIQaTqn5j-1RphctR2fyqEaL3bfIybu0p/exec';
+
 // Images tab (schema 1.2): one row per image. See docs/SOURCES.md §7.
 const IMAGES_HEADERS = [
   'Material_Key', 'Image_Type', 'Source_URL', 'Source_Format',
@@ -45,11 +50,35 @@ function onOpen() {
     .addItem('2. Sync Image Assets',         'syncImageAssets')
     .addItem('3. Export to JSON',            'exportToJson')
     .addSeparator()
+    .addItem('Open Mood Board',              'openMoodBoardDashboard')
+    .addSeparator()
     .addItem('Seed Images from Supplier',    'seedImagesFromSupplier')
     .addItem('Compute Missing Scales',       'computeMissingScales')
     .addItem('Audit Materials Folder',       'auditMaterialsFolder')
     .addItem('Format Active Sheet',          'formatActiveSheetColumns')
     .addToUi();
+}
+
+/**
+ * Opens the standalone read-only Mood Board dashboard (a separate web app — see
+ * MOODBOARD_WEBAPP_URL) in a new browser tab. A modal dialog is used because
+ * server-side code can't open a tab directly; it auto-opens via window.open and
+ * also shows a button as a fallback when the popup is blocked.
+ */
+function openMoodBoardDashboard() {
+  const url  = MOODBOARD_WEBAPP_URL;
+  const html = HtmlService.createHtmlOutput(
+    '<!DOCTYPE html><html><head><base target="_top"><meta charset="utf-8">' +
+    '<style>body{font-family:Roboto,Arial,sans-serif;margin:18px;color:#202124}' +
+    'p{font-size:13px;color:#5f6368;margin:0 0 14px}' +
+    'a.btn{display:inline-block;background:#1a1a2e;color:#fff;text-decoration:none;' +
+    'padding:10px 18px;border-radius:8px;font-weight:600;font-size:13px}</style></head>' +
+    '<body><p>Opening the Design Bundles mood board in a new tab…</p>' +
+    '<a class="btn" href="' + url + '" target="_blank" rel="noopener" ' +
+    'onclick="google.script.host.close()">Open Dashboard</a>' +
+    '<script>window.open(' + JSON.stringify(url) + ',"_blank");</script></body></html>'
+  ).setWidth(380).setHeight(130);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Mood Board Dashboard');
 }
 
 // ── STEP 1 ───────────────────────────────────────────────────────────────────
@@ -194,9 +223,10 @@ function ensureImagesSheet_() {
  * (File_ID / Drive_URL / Filename), copying VScale/HScale across. Safe to re-run —
  * skips any material that already has a Material_Image row.
  *
- * After verifying the Images-based pipeline, the legacy image columns
- * (File_ID/Drive_URL/Filename/Sync_Status/VScale/HScale) can be removed from the
- * Supplier tab by hand — schema 1.2 export no longer reads them.
+ * The live Supplier tab was cleaned on 2026-06-25: legacy image columns
+ * (File_ID/Drive_URL/Filename/Sync_Status) were removed, leaving A:H as the
+ * current schema. This helper is retained for old copies/backups where those
+ * columns still exist; on the cleaned live sheet it is a safe no-op.
  */
 function seedImagesFromSupplier() {
   const ss       = SpreadsheetApp.getActiveSpreadsheet();

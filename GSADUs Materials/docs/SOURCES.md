@@ -122,22 +122,24 @@ fields.
 
 ## 5. Downstream Contract — `bundles_library.json`
 
-Written by `Code.js` Step 3 (`exportToJson`). Schema `1.1`:
+Written by `Code.js` Step 3 (`exportToJson`). Schema `1.2`:
 
 ```
 { _meta: { last_sync, source, schema_version },
   hardware: [ { name, image_url } ],
   bundles: [ { name, materials: [ {
     category, supplier, product_name, product_size,
-    product_url, drive_file_id, drive_url, filename
+    product_url, material_key,
+    images: [ { type, file_id, drive_url, filename, format,
+                width, height, vscale, hscale, source_url } ]
   } ] } ] }
 ```
 
 - `product_url` is parsed out of the `=HYPERLINK()` formula in `Supplier_URL`.
+- Material media is nested under `images[]`; the old material-level image fields are gone.
 - `Sync_Status` is **intentionally omitted** — internal bookkeeping only.
-- **Proposed extension:** carry `vscale` / `hscale` (non-null only) so Revit/Architextures
-  and PNGTools can consume real-world scale without re-deriving it. See
-  `Moodboard/Material-Scale-plan.md` §5.
+- `vscale` / `hscale` are exported on image rows where present, so Revit/Architextures
+  and PNGTools can consume real-world scale without re-deriving it.
 
 **Consumers:** PNGTools (render content, live) · Revit Design Bundles via Architextures
 tiling (the VScale/HScale path — GAP-05 / INT-02, open) · WebCatalog/Supabase (proposed).
@@ -161,11 +163,12 @@ downstream consumers today.
 
 ---
 
-## 7. Image Assets Model (proposed — schema 1.2)
+## 7. Image Assets Model (implemented — schema 1.2)
 
-> Status: **PROPOSED.** Replaces the single-image fields on the material row
+> Status: **IMPLEMENTED.** Replaces the single-image fields on the material row
 > (`File_ID` / `Drive_URL` / `Filename`) with a dedicated **`Images` tab**, because a
 > material can have several images of different *types*, each with its own specs.
+> Cleanup confirmed 2026-06-25: the live Supplier tab now ends at `HScale`.
 
 ### Why a separate tab (not more columns)
 
@@ -240,8 +243,8 @@ Conversion subtab). Division of labor:
 ### JSON export (schema 1.2)
 
 `exportToJson` nests images per material and **drops the old single-image fields**
-(Rule #6 — no parallel paths; the material's current `drive_file_id` / `drive_url` /
-`filename` migrate into a `Material_Image` entry):
+(Rule #6 — no parallel paths; the material's previous material-level image data
+migrated into `Material_Image` entries):
 
 ```json
 "images": [
