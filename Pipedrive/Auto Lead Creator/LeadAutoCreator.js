@@ -6,7 +6,12 @@
 // ===== CONFIG =====
 const SALES_INBOX = 'Sales@gsadus.com';
 const LABEL_ACCEPT = '1 - SALES/NEW LEADS (AUTO)';
+const LABEL_FILTERED = 'SPAM (AUTO)';             // spam/test submissions: skipped, not deleted (audit trail). Top-level, not under "1 - SALES".
+const LABEL_FORCE = '1 - SALES/FORCE (MANUAL)';  // manual override: apply to a filtered msg to force lead creation
 const LEAD_ADDRESS_FIELD_KEY = 'e76ad51def930fd350324b8057577be5bde93023'; // Lead custom field
+
+// Pipedrive API token is read from Script Properties (Project Settings → Script Properties → PD_API_TOKEN).
+// Do NOT hardcode the token in source; this file is tracked in git.
 
 // Processing controls
 const MAX_PER_RUN = 5;              // smooth bursts
@@ -102,9 +107,16 @@ function processInbox() {
     return;
   }
 
-  // Gmail-only phase
-  const q = `deliveredto:${SALES_INBOX} newer_than:${SEARCH_WINDOW} -label:"${LABEL_ACCEPT}"`;
+  // One-time rollout guard: mark test/spam that was already sitting in the inbox when the
+  // spam filter was deployed (labeled SPAM during rollout) as processed, so recalibration
+  // does not backfill it into Pipedrive. No-op after the first successful run.
+  maybeBackfillSkip_();
+
+  // Gmail-only phase. Exclude both the accept label (already-created leads) and the
+  // spam label (already-classified junk) so neither is reconsidered.
+  const q = `deliveredto:${SALES_INBOX} newer_than:${SEARCH_WINDOW} -label:"${LABEL_ACCEPT}" -label:"${LABEL_FILTERED}"`;
   const threads = GmailApp.search(q, 0, 50);
+  console.log(`processInbox: search q="${q}" threads=${threads.length}`);
   if (!threads.length) return;
 
   const acceptLabel = getOrCreateNestedLabel(LABEL_ACCEPT);
@@ -112,10 +124,13 @@ function processInbox() {
 
   // Collect new, valid candidates using only Gmail
   const candidatesAll = collectCandidates(threads, dedupe);
-  if (!candidatesAll.length) return;
+  console.log(`processInbox: collected candidatesAll=${candidatesAll.length}`);
+  // collectCandidates may have marked spam/test messages as processed; persist that.
+  if (!candidatesAll.length) { saveDedupe(dedupe); return; }
 
   // Cap per run to smooth burst/budget
   const candidates = candidatesAll.slice(0, MAX_PER_RUN);
+  console.log(`processInbox: processing ${candidates.length} candidates (max ${MAX_PER_RUN})`);
 
   // Pipedrive operations only if we have work
   const pd = new PipedriveClient();
@@ -138,8 +153,13 @@ function processInbox() {
       const lead = pd.createLead(payload);
       pd.addNoteToLead(lead.id, buildNote(parsed, msg));
 
+      console.log(`processInbox: lead created leadId=${lead.id} personId=${personId} msgId=${msg.getId()} title="${leadTitle}" email="${parsed.email||''}" phone="${parsed.phone||''}"`);
+
       msg.markRead();
       thread.addLabel(acceptLabel);
+      // Clear override/spam labels so a FORCE rescue fires only once and the thread's
+      // final state is just the accept label (no-op for a normal first-time lead).
+      clearOverrideLabels_(thread);
 
       // record idempotency
       dedupe[msg.getId()] = Date.now();
@@ -152,25 +172,41 @@ function processInbox() {
         saveDedupe(dedupe);
         return; // exit early, try later
       }
-      console.log(`Error processing message ${msg.getId()}: ${e && e.message}`);
+      if (isAuthError(e)) {
+        console.log(`Pipedrive auth error — check PD_API_TOKEN and PD_API_BASE. ${e && e.message}`);
+        return; // abort run; configuration issue
+      }
+      console.log(`Error processing message ${msg.getId()}: ${e && e.message} stack=${e && e.stack}`);
       // continue with next candidate
     }
   }
 
   saveDedupe(dedupe);
+  console.log(`processInbox: run complete processed=${candidates.length}`);
 }
 
 // Collect at most one candidate per thread, Gmail-only
 function collectCandidates(threads, dedupe){
   const out = [];
+  let filteredLabel = null; // lazily created only if something needs filtering
   for (const thread of threads) {
-    // newest to oldest; choose first unprocessed recognizable lead only
+    // Newest to oldest. Evaluate EVERY message: the redesigned site threads all form
+    // submissions into one Gmail conversation (identical subject), so a thread holds many
+    // distinct leads, not one. Per-message dedupe keeps it idempotent.
     const messages = thread.getMessages().slice().reverse();
     for (const msg of messages) {
       try {
         if (msg.isInTrash()) continue;
         const msgId = msg.getId();
-        if (dedupe[msgId]) continue;
+
+        // Manual override: a human applied the FORCE label to rescue a false positive.
+        // Evaluated BEFORE the dedupe skip so a previously-filtered message can be re-admitted.
+        const forced = threadHasLabel(thread, LABEL_FORCE);
+
+        // Idempotency guard. NOTE: the -label: clauses in the Gmail query do NOT match these
+        // parenthesized label names, so THIS dedupe map — not the labels — is the authoritative
+        // "already handled" record for both created leads and filtered junk.
+        if (dedupe[msgId] && !forced) continue;
 
         // Use profile-based parser from EmailProfiles.js
         const profParsed = parseLeadFromMessage(msg);
@@ -188,8 +224,31 @@ function collectCandidates(threads, dedupe){
         // Minimal validity: need at least email or phone
         if (!parsed.email && !parsed.phone) continue;
 
+        // Spam / test backstop (bypassed when forced). Filtered mail is labeled (audit trail)
+        // and marked processed so it is not re-evaluated every run; it is never deleted, and
+        // applying the FORCE label re-admits it via the check above.
+        if (!forced) {
+          const verdict = classifyLead(parsed);
+          if (verdict.isSpam || verdict.isTest) {
+            const kind = verdict.isSpam ? 'SPAM' : 'TEST';
+            console.log(`collectCandidates: filtered ${kind} msgId=${msgId} email="${parsed.email}" phone="${parsed.phone}" score=${verdict.score} reasons=[${verdict.reasons.join(',')}]`);
+            dedupe[msgId] = Date.now(); // authoritative skip on future runs
+            try {
+              if (!filteredLabel) filteredLabel = getOrCreateNestedLabel(LABEL_FILTERED);
+              thread.addLabel(filteredLabel);
+              msg.markRead();
+            } catch (le) {
+              console.log(`collectCandidates: could not label filtered msgId=${msgId}: ${le && le.message}`);
+            }
+            continue; // check older messages in this thread, if any
+          }
+        } else {
+          console.log(`collectCandidates: FORCE override msgId=${msgId} — spam filter bypassed`);
+        }
+
         out.push({ thread, msg, parsed });
-        break; // only one per thread
+        // No break: with all submissions in one thread, keep collecting every distinct lead
+        // (MAX_PER_RUN caps how many are created per run).
       } catch (e) {
         console.log(`Error while collecting candidate for message ${msg.getId()}: ${e && e.message}`);
       }
@@ -218,6 +277,12 @@ function isRateLimitError(e){
   return s.includes('http 429') || s.includes('rate limit') || s.includes('budget exceeded') || (e && e.code === 429);
 }
 
+function isAuthError(e){
+  const msg = (e && e.message) ? e.message : String(e || '');
+  const s = msg.toLowerCase();
+  return s.includes('http 401') || s.includes('unauthorized access') || (e && e.code === 401);
+}
+
 // ===== INTEGRATION NOTE =====
 // Candidate detection now relies solely on EmailProfiles.js via parseLeadFromMessage(msg).
 // Subject/sender heuristics have been removed to avoid brittleness.
@@ -234,6 +299,56 @@ function getOrCreateNestedLabel(path) {
   return label;
 }
 
+// True if the thread currently carries a user label with the exact given name.
+function threadHasLabel(thread, name) {
+  try {
+    const labels = thread.getLabels() || [];
+    for (let i = 0; i < labels.length; i++) {
+      if (labels[i].getName() === name) return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+// Remove the FORCE and SPAM labels from a thread (used after a successful lead creation
+// so a manual rescue is one-shot and the thread ends in a clean accept-only state).
+function clearOverrideLabels_(thread) {
+  try { const fl = GmailApp.getUserLabelByName(LABEL_FORCE);    if (fl) thread.removeLabel(fl); } catch (_) {}
+  try { const sl = GmailApp.getUserLabelByName(LABEL_FILTERED); if (sl) thread.removeLabel(sl); } catch (_) {}
+}
+
+// One-time rollout guard. When the spam filter is first deployed the inbox already holds
+// test/spam submissions (labeled SPAM during rollout). Mark every currently SPAM-labeled
+// message as processed so processInbox will not create leads for them. Gated by a Script
+// Property so it runs exactly once.
+function maybeBackfillSkip_() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('spam_backfill_done')) return;
+  try {
+    const label = GmailApp.getUserLabelByName(LABEL_FILTERED);
+    if (label) {
+      const dedupe = loadDedupe();
+      let start = 0, n = 0;
+      while (true) {
+        const threads = label.getThreads(start, 100);
+        if (!threads.length) break;
+        for (const t of threads) {
+          const msgs = t.getMessages();
+          for (let i = 0; i < msgs.length; i++) { dedupe[msgs[i].getId()] = Date.now(); n++; }
+        }
+        start += threads.length;
+        if (threads.length < 100) break;
+      }
+      saveDedupe(dedupe);
+      console.log(`maybeBackfillSkip_: marked ${n} SPAM-labeled messages as processed.`);
+    }
+  } catch (e) {
+    console.log(`maybeBackfillSkip_: error (will retry next run) ${e && e.message}`);
+    return; // do not set the flag; allow retry
+  }
+  props.setProperty('spam_backfill_done', '1');
+}
+
 // ===== UTILS =====
 function normalizePhone(s){
   if(!s) return '';
@@ -246,9 +361,13 @@ function normalizePhone(s){
 // ===== PIPEDRIVE CLIENT =====
 class PipedriveClient {
   constructor(){
-    this.base = PropertiesService.getScriptProperties().getProperty('PD_API_BASE') || 'https://api.pipedrive.com/v1';
-    this.token = PropertiesService.getScriptProperties().getProperty('PD_API_TOKEN');
-    if(!this.token) throw new Error('Missing PD_API_TOKEN.');
+    const props = PropertiesService.getScriptProperties();
+    this.base = props.getProperty('PD_API_BASE') || 'https://api.pipedrive.com/v1';
+    this.token = (props.getProperty('PD_API_TOKEN') || '').trim();
+    if (!this.token) {
+      throw new Error('Missing PD_API_TOKEN. Set it in Project Settings → Script Properties.');
+    }
+    console.log(`PD token loaded from Script Properties (ends with ${this.token.slice(-4)}).`);
   }
   call_(path, method='get', payload){
     const url = `${this.base}${path}${path.includes('?')?'&':'?'}api_token=${encodeURIComponent(this.token)}`;
@@ -403,5 +522,42 @@ function sparseSyncPersonsCache() {
   } finally {
     props.setProperty(SYNC_CURSOR_PROP, String(start));
     console.log(`sparseSyncPersonsCache: processed=${processed} next_start=${start}`);
+  }
+}
+
+// ===== DEBUG UTILITIES (non-destructive) =====
+function debugListInboxCandidates(limit) {
+  const q = `deliveredto:${SALES_INBOX} newer_than:${SEARCH_WINDOW} -label:"${LABEL_ACCEPT}" -label:"${LABEL_FILTERED}"`;
+  const threads = GmailApp.search(q, 0, limit || 20);
+  const dedupe = loadDedupe();
+  console.log(`Query: ${q} threads=${threads.length}`);
+  let count = 0;
+  for (const thread of threads) {
+    const messages = thread.getMessages().slice().reverse();
+    for (const msg of messages) {
+      const msgId = msg.getId();
+      const subject = msg.getSubject();
+      if (dedupe[msgId]) { console.log(`skip msgId=${msgId} subject="${subject}" reason=deduped`); continue; }
+      const parsed = parseLeadFromMessage(msg);
+      if (!parsed) { console.log(`skip msgId=${msgId} subject="${subject}" reason=no-profile-match`); continue; }
+      console.log(`CANDIDATE msgId=${msgId} subject="${subject}" parsed=${JSON.stringify(parsed)}`);
+      count++;
+      break; // one per thread
+    }
+  }
+  console.log(`Total candidates=${count}`);
+}
+
+// Quick auth check helper to validate PD_API_TOKEN
+function debugCheckPipedriveAuth(){
+  try {
+    const pd = new PipedriveClient();
+    const res = pd.call_('/users/me', 'get');
+    const user = res && res.data ? res.data : null;
+    const name = user ? (user.name || '(unknown)') : '(no data)';
+    const company = user ? (user.company_name || '(unknown company)') : '';
+    console.log(`Pipedrive auth OK: user=${name} company=${company}`);
+  } catch (e) {
+    console.log(`Pipedrive auth FAIL: ${e && e.message}`);
   }
 }

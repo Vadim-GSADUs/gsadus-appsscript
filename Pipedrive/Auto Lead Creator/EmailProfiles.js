@@ -30,6 +30,9 @@
  *   if (!parsed) continue;
  */
 function parseLeadFromMessage(msg) {
+  if (!msg || typeof msg.getSubject !== 'function' || typeof msg.getBody !== 'function' || typeof msg.getDate !== 'function') {
+    return null;
+  }
   const subject = msg.getSubject() || '';
   const date    = msg.getDate();
   const bodyRaw = msg.getBody() || '';
@@ -75,24 +78,24 @@ var EMAIL_PROFILES = [
         regex: /Full Name\s*:\s*(.+?)(?=\s*(Mobile\s*:|Email Id\s*:|Full Address\s*:|Message\s*:|--|$))/i
       },
 
-      // Email Id: email@domain.com
+      // Email Id / Email Address / Email: email@domain.com
       email: {
-        regex: /Email Id\s*:\s*([^\s]+@[^\s]+)/i
+        regex: /(?:Email\s*Id|Email\s*Address|Email)\s*:\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i
       },
 
-      // Mobile : 9167705270
+      // Mobile / Phone / Phone Number : 9167705270
       mobilePhone: {
-        regex: /Mobile\s*:\s*([0-9+()\-\s]+)/i
+        regex: /(?:Mobile|Phone|Phone\s*Number)\s*:\s*([0-9+()\-\s]+)/i
       },
 
-      // Full Address : ...
+      // Full Address / Address : ...
       address: {
-        regex: /Full Address\s*:\s*(.+?)(?=\s*(Message\s*:|--|$))/is
+        regex: /(?:Full\s*Address|Address)\s*:\s*(.+?)(?=\s*(?:Message\s*:|Comments\s*:|--|$))/is
       },
 
-      // Message : ...
+      // Message / Comments : ...
       note: {
-        regex: /Message\s*:\s*([\s\S]+?)(?=\s*--\s*$|$)/i
+        regex: /(?:Message|Comments)\s*:\s*([\s\S]+?)(?=\s*--\s*$|$)/i
       }
     }
   },
@@ -105,31 +108,70 @@ var EMAIL_PROFILES = [
     subjectIncludes: 'City Query Form',
 
     patterns: {
-      // User Name : [username]
+      // User Name / Name : [username]
       fullName: {
-        regex: /User Name\s*:\s*(.+?)(?=\s*(Phone\s*:|Email Address\s*:|Message\s*:|--|$))/i
+        regex: /(?:User\s*Name|Name)\s*:\s*(.+?)(?=\s*(?:Phone\s*:|Phone\s*Number\s*:|Email\s*Address\s*:|Email\s*:|Message\s*:|--|$))/i
       },
 
-      // Email Address : email@domain.com
+      // Email Address / Email : email@domain.com
       email: {
-        regex: /Email Address\s*:\s*([^\s]+@[^\s]+)/i
+        regex: /(?:Email\s*Address|Email)\s*:\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i
       },
 
-      // Phone : 9168060809
+      // Phone / Phone Number : 9168060809
       mobilePhone: {
-        regex: /Phone\s*:\s*([0-9+()\-\s]+)/i
+        regex: /(?:Phone|Phone\s*Number)\s*:\s*([0-9+()\-\s]+)/i
       },
 
       // No explicit address in this template; leave null.
       // Add later if they change the form.
 
-      // Message : ...
+      // Message / Comments : ...
       note: {
-        regex: /Message\s*:\s*([\s\S]+?)(?=\s*--\s*$|$)/i
+        regex: /(?:Message|Comments)\s*:\s*([\s\S]+?)(?=\s*--\s*$|$)/i
+      }
+    }
+  },
+
+  // ---------------------------------------------------------
+  // PROFILE 3: "Elementor Contact Form" (redesigned gsadus.com website, added 2026-07-22)
+  // Subject: New message from "Golden State ADUs"
+  // From:    Golden State ADUs <email@gsadus.com>
+  // Body labels: Full Name / Phone / Email / Address / Type of Visit / Message
+  // A "---" separator line precedes an Elementor footer (Date / Time / Page URL /
+  // User Agent / Remote IP / Powered by), which must be excluded from parsed fields.
+  // ---------------------------------------------------------
+  {
+    key: 'PROFILE_WEB_CONTACT_ELEMENTOR',
+    subjectIncludes: 'New message from "Golden State ADUs"',
+
+    patterns: {
+      // Full Name: John Doe  (value stays on its own line; empty -> no value)
+      fullName: {
+        regex: /Full\s*Name\s*:[ \t]*(.*?)(?=\s*(?:Phone\s*:|Email\s*:|Address\s*:|Type\s*of\s*Visit\s*:|Message\s*:|-{3,}|$))/i
+      },
+
+      // Email: john@example.com
+      email: {
+        regex: /Email\s*:\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i
+      },
+
+      // Phone: 5551234567
+      mobilePhone: {
+        regex: /Phone\s*:\s*([0-9+()\-\s]+)/i
+      },
+
+      // Address: 123 Main St, City  (value stays on its own line; empty -> no value)
+      address: {
+        regex: /Address\s*:[ \t]*(.*?)(?=\s*(?:Type\s*of\s*Visit\s*:|Message\s*:|-{3,}|$))/i
+      },
+
+      // Message: ... (stop at the "---" footer separator or a footer label line)
+      note: {
+        regex: /Message\s*:\s*([\s\S]*?)(?=\s*-{3,}\s*(?:\r?\n|$)|\n\s*(?:Date|Time|Page\s*URL|User\s*Agent|Remote\s*IP|Powered\s*by)\s*:|$)/i
       }
     }
   }
-
   // Add more profiles here as needed.
 ];
 
@@ -141,11 +183,16 @@ var EMAIL_PROFILES = [
  * Supports simple includes or full regex.
  */
 function subjectMatchesProfile_(subject, profile) {
+  subject = subject || '';
   if (profile.subjectRegex) {
-    return profile.subjectRegex.test(subject);
+    try {
+      return profile.subjectRegex.test(subject);
+    } catch (e) {
+      return false;
+    }
   }
   if (profile.subjectIncludes) {
-    return subject.indexOf(profile.subjectIncludes) !== -1;
+    return subject.toLowerCase().indexOf(String(profile.subjectIncludes).toLowerCase()) !== -1;
   }
   return false;
 }
@@ -164,12 +211,14 @@ function parseWithProfile_(body, profile) {
     note:        null
   };
 
-  // Helper: extract first group of regex, trimmed.
+  // Helper: extract first group of regex (or full match), trimmed.
   function extract(pattern) {
     if (!pattern || !pattern.regex) return null;
     var m = body.match(pattern.regex);
-    if (!m || !m[1]) return null;
-    return m[1].toString().trim();
+    if (!m) return null;
+    var raw = (m[1] !== undefined && m[1] !== null) ? m[1] : m[0];
+    if (!raw) return null;
+    return String(raw).toString().trim();
   }
 
   result.fullName    = extract(patterns.fullName);
@@ -209,6 +258,13 @@ function stripHtmlToText_(html) {
   return text
     .replace(/\r/g, '')
     .replace(/\u00A0/g, ' ')
+    // Decode a few common HTML entities that appear in emails
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
     .trim();
 }
 
@@ -259,3 +315,38 @@ Output only the JavaScript object, no explanation, no backticks.
 
 After I paste the sample email(s), infer the best regex patterns and respond with the single profile object ready to append to my EMAIL_PROFILES array.
 */
+
+function testParseLatest() {
+  var t = GmailApp.search('newer_than:7d deliveredto:Sales@gsadus.com', 0, 1)[0];
+  if (!t) { Logger.log('No thread'); return; }
+  var msg = t.getMessages().slice(-1)[0]; // newest
+  var parsed = parseLeadFromMessage(msg);
+  Logger.log(JSON.stringify(parsed));
+}
+
+/**
+ * Diagnostics: iterate recent messages and explain profile matching and extraction.
+ */
+function diagnoseRecentLeads(limit) {
+  limit = limit || 10;
+  var threads = GmailApp.search('newer_than:7d deliveredto:Sales@gsadus.com', 0, limit);
+  if (!threads || !threads.length) { Logger.log('No threads'); return; }
+  for (var i = 0; i < threads.length; i++) {
+    var msg = threads[i].getMessages().slice(-1)[0];
+    if (!msg) continue;
+    var subject = msg.getSubject() || '';
+    var body = stripHtmlToText_(msg.getBody() || '');
+    Logger.log('--- Thread #' + (i+1) + ' ---');
+    Logger.log('Subject: ' + subject);
+    var matched = false;
+    for (var p = 0; p < EMAIL_PROFILES.length; p++) {
+      var profile = EMAIL_PROFILES[p];
+      var subMatch = subjectMatchesProfile_(subject, profile);
+      if (!subMatch) continue;
+      matched = true;
+      var r = parseWithProfile_(body, profile);
+      Logger.log('Profile: ' + profile.key + ' => ' + JSON.stringify(r));
+    }
+    if (!matched) Logger.log('No profile subject match for this message.');
+  }
+}
