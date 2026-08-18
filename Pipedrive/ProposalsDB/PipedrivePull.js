@@ -212,6 +212,13 @@ function buildDealHeadersFromMeta_(fieldMeta, pipelineMap, stageMap) {
     if (origin === 'ManuallyCreated') return 'Manually created';
     return origin;
   };
+
+  const formatProposalNumber = function(v) {
+    // PP# custom field is a Pipedrive double — render as a plain integer, no decimals
+    if (v === null || v === undefined || v === '') return '';
+    const n = Number(v);
+    return isNaN(n) ? '' : Math.round(n);
+  };
   
   // Define the exact column order and extraction logic per the mapping spec
   const headers = [
@@ -288,7 +295,7 @@ function buildDealHeadersFromMeta_(fieldMeta, pipelineMap, stageMap) {
     { key: 'address_country', name: 'Deal - Country of Address', extractor: function(d) { return d[CONFIG.PIPEDRIVE.FIELD_KEYS.ADDRESS + '_country'] || ''; } },
     { key: 'address_zip', name: 'Deal - ZIP/Postal code of Address', extractor: function(d) { return d[CONFIG.PIPEDRIVE.FIELD_KEYS.ADDRESS + '_postal_code'] || ''; } },
     { key: 'address_full', name: 'Deal - Full/combined address of Address', extractor: function(d) { return d[CONFIG.PIPEDRIVE.FIELD_KEYS.ADDRESS + '_formatted_address'] || ''; } },
-    { key: 'proposal', name: 'Deal - Proposal #', extractor: function(d) { return d[CONFIG.PIPEDRIVE.FIELD_KEYS.PROPOSAL] || ''; } },
+    { key: 'proposal', name: 'Deal - Proposal #', extractor: function(d) { return formatProposalNumber(d[CONFIG.PIPEDRIVE.FIELD_KEYS.PROPOSAL]); } },
     { key: 'folder_url', name: 'Deal - Folder URL', extractor: function(d) { return d[CONFIG.PIPEDRIVE.FIELD_KEYS.FOLDER_URL] || ''; } }
   ];
   
@@ -437,25 +444,28 @@ function validateDealFolderUrls_() {
         continue;
       }
       
-      // Folder name validation: PP# in folder name should match Pipedrive field
+      // Folder name validation: numeric key of the PP# in the folder name
+      // (e.g. "PP170 ..." -> 170) should match the numeric PP# deal field
       if (proposalNum) {
         const folderName = folder.getName();
         const folderPP = extractProposalNumber_(folderName);
-        
-        if (folderPP !== proposalNum) {
+        const folderKey = extractKeyFromProposalNumber_(folderPP);
+        const dealKey = Math.round(Number(proposalNum));
+
+        if (folderKey !== dealKey) {
           issues.push({
             dealId: dealId,
             proposalNum: proposalNum,
             type: 'PP_MISMATCH',
-            error: 'Folder name "' + folderName + '" has PP# "' + folderPP + '" but deal has "' + proposalNum + '"',
+            error: 'Folder name "' + folderName + '" has PP# "' + folderPP + '" but deal has "' + dealKey + '"',
             folderUrl: folderUrl,
             rowIndex: i
           });
-          
+
           logEvent_(
             'VALIDATION_WARN',
             'Deal ' + dealId + ' PP# mismatch',
-            'Pipedrive: ' + proposalNum + ', Folder name: ' + folderPP
+            'Pipedrive: ' + dealKey + ', Folder name: ' + folderPP
           );
         }
       }

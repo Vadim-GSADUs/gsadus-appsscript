@@ -155,7 +155,7 @@ function getFieldClassificationMap() {
     'Deal - Country of Address': { key: CONFIG.PIPEDRIVE.FIELD_KEYS.ADDRESS + '_country', category: 'USER_EDITABLE', notes: '' },
     'Deal - ZIP/Postal code of Address': { key: CONFIG.PIPEDRIVE.FIELD_KEYS.ADDRESS + '_postal_code', category: 'USER_EDITABLE', notes: '' },
     'Deal - Full/combined address of Address': { key: CONFIG.PIPEDRIVE.FIELD_KEYS.ADDRESS + '_formatted_address', category: 'USER_EDITABLE', notes: '' },
-    'Deal - Proposal #': { key: CONFIG.PIPEDRIVE.FIELD_KEYS.PROPOSAL, category: 'USER_EDITABLE', notes: 'Custom field' },
+    'Deal - Proposal #': { key: CONFIG.PIPEDRIVE.FIELD_KEYS.PROPOSAL, category: 'USER_EDITABLE', notes: 'Custom field "PP#" (numeric, plain integer)' },
     'Deal - Folder URL': { key: CONFIG.PIPEDRIVE.FIELD_KEYS.FOLDER_URL, category: 'USER_EDITABLE', notes: 'Custom field' }
   };
 }

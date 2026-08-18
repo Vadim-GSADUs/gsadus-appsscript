@@ -184,7 +184,9 @@ function handleDealChange_(deal) {
   }
 
   var updateBody = {};
-  updateBody[fieldKeys.PROPOSAL] = proposalNum;
+  // PP# field is numeric (double): send the integer key ("PP171" -> 171).
+  // Folder names and logs keep the "PP"-prefixed form.
+  updateBody[fieldKeys.PROPOSAL] = extractKeyFromProposalNumber_(proposalNum);
   updateBody[fieldKeys.FOLDER_URL] = folderUrl;
   updateBody.label = null;
 

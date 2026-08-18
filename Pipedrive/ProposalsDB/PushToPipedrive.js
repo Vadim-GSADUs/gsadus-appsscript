@@ -153,6 +153,9 @@ function buildPushPayload_(dealChanges) {
     } else if (fieldKey === 'stage_id' || fieldKey === 'user_id' || fieldKey === 'person_id' || fieldKey === 'org_id') {
       // ID fields - must be numbers
       value = (value === '' || value === null) ? null : Number(value);
+    } else if (fieldKey === CONFIG.PIPEDRIVE.FIELD_KEYS.PROPOSAL) {
+      // PP# custom field is a Pipedrive double — push as a plain integer
+      value = (value === '' || value === null) ? null : Math.round(Number(value));
     } else if (fieldKey === 'visible_to') {
       // Visibility codes: convert text back to number
       if (value === 'Item owner') value = 1;
@@ -160,7 +163,7 @@ function buildPushPayload_(dealChanges) {
       else if (value === 'Owner only') value = 7;
       else value = Number(value); // fallback
     }
-    // String fields (title, currency, lost_reason, custom fields) stay as-is
+    // String fields (title, currency, lost_reason, other custom fields) stay as-is
     
     payload[fieldKey] = value;
   });

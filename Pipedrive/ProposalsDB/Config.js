@@ -44,10 +44,12 @@ const CONFIG = {
   PIPEDRIVE: {
     BASE_URL: 'https://goldenstateadus.pipedrive.com/api/v1',
 
-    // Deal custom field keys (from your .txt)
+    // Deal custom field keys
     FIELD_KEYS: {
       ADDRESS:   'e76ad51def930fd350324b8057577be5bde93023',
-      PROPOSAL:  'b9624c565b0f69d38da9f24f05a6a9dca610ec4d',
+      // "PP#" (double): plain integer proposal number, e.g. 7.
+      // Replaced the legacy "Proposal #" varchar field ("PP7"-style text) on 2026-08-18.
+      PROPOSAL:  '229061d66b1f6e4e387190cc98c29f11c11ca54e',
       FOLDER_URL:'2167ecfe9ec7dcb313d47c615ec532412a0c718a'
     },
 
