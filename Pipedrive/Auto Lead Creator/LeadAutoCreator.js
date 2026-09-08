@@ -15,7 +15,14 @@ const LEAD_ADDRESS_FIELD_KEY = 'e76ad51def930fd350324b8057577be5bde93023'; // Le
 
 // Processing controls
 const MAX_PER_RUN = 5;              // smooth bursts
-const SEARCH_WINDOW = '3d';         // Gmail search window
+// Gmail search window. For a one-off backfill (e.g. the 2026-09-01 recovery of spam-foldered
+// August leads) widen this temporarily, let the trigger drain it, then put it back.
+const SEARCH_WINDOW = '3d';
+// Gmail's own spam filter has been quarantining ~half of all website-form emails (the
+// Hostinger web server sends them with an unaligned envelope, so DMARC fails for gsadus.com).
+// Search Spam as well, and pull an accepted lead's thread back into the Inbox.
+const SEARCH_SPAM_TOO = true;
+const SEARCH_MAX_THREADS = 300;     // upper bound per run across all pages
 
 // Idempotency
 const DEDUPE_KEY = 'processed_msg_ids';  // JSON: { "<msgId>": <epoch_ms>, ... }
@@ -112,11 +119,10 @@ function processInbox() {
   // does not backfill it into Pipedrive. No-op after the first successful run.
   maybeBackfillSkip_();
 
-  // Gmail-only phase. Exclude both the accept label (already-created leads) and the
-  // spam label (already-classified junk) so neither is reconsidered.
-  const q = `deliveredto:${SALES_INBOX} newer_than:${SEARCH_WINDOW} -label:"${LABEL_ACCEPT}" -label:"${LABEL_FILTERED}"`;
-  const threads = GmailApp.search(q, 0, 50);
-  console.log(`processInbox: search q="${q}" threads=${threads.length}`);
+  // Gmail-only phase. Inbox/archive AND Spam (see SEARCH_SPAM_TOO). Already-handled
+  // messages are skipped by the dedupe map, not by labels (see collectCandidates).
+  const threads = searchLeadThreads_();
+  console.log(`processInbox: threads=${threads.length}`);
   if (!threads.length) return;
 
   const acceptLabel = getOrCreateNestedLabel(LABEL_ACCEPT);
@@ -160,6 +166,8 @@ function processInbox() {
       // Clear override/spam labels so a FORCE rescue fires only once and the thread's
       // final state is just the accept label (no-op for a normal first-time lead).
       clearOverrideLabels_(thread);
+      // If Gmail had quarantined this lead, bring it back where the sales team can see it.
+      rescueFromSpam_(thread, msg.getId());
 
       // record idempotency
       dedupe[msg.getId()] = Date.now();
@@ -255,6 +263,61 @@ function collectCandidates(threads, dedupe){
     }
   }
   return out;
+}
+
+// ===== GMAIL SEARCH =====
+// Subject clause built from the profiles so the window can be wide without the 50-thread page
+// filling up with unrelated Sales@ mail.
+function leadSubjectClause_() {
+  const subs = (EMAIL_PROFILES || [])
+    .map(p => p.subjectIncludes)
+    .filter(Boolean)
+    .map(s => `subject:"${String(s).replace(/"/g, '')}"`);
+  return subs.length ? `(${subs.join(' OR ')})` : '';
+}
+
+// Base query (no folder clause). Gmail searches exclude Spam/Trash by default.
+function leadBaseQuery_() {
+  return `deliveredto:${SALES_INBOX} newer_than:${SEARCH_WINDOW} ${leadSubjectClause_()}`.trim();
+}
+
+// All candidate threads: the normal search plus, when enabled, the same query scoped to Spam.
+// Pages through GmailApp.search (50/page) up to SEARCH_MAX_THREADS; merges by thread id.
+function searchLeadThreads_() {
+  const base = leadBaseQuery_();
+  const queries = SEARCH_SPAM_TOO ? [base, `in:spam ${base}`] : [base];
+  const seen = {};
+  const out = [];
+  for (const q of queries) {
+    let start = 0, pages = 0;
+    while (out.length < SEARCH_MAX_THREADS) {
+      const page = GmailApp.search(q, start, 50);
+      pages++;
+      for (const t of page) {
+        const id = t.getId();
+        if (!seen[id]) { seen[id] = true; out.push(t); }
+      }
+      if (page.length < 50) break;
+      start += 50;
+    }
+    console.log(`searchLeadThreads_: q="${q}" pages=${pages} merged=${out.length}`);
+  }
+  return out;
+}
+
+// Gmail spam-foldered this lead's thread (or part of it — the site threads every submission
+// under one subject). Move the thread back to the Inbox so the team sees the rescued lead.
+// Thread-level by necessity: GmailApp has no per-message move-to-inbox, and the Gmail
+// advanced service would require a re-authorization of the trigger owner.
+function rescueFromSpam_(thread, msgId) {
+  try {
+    if (thread.isInSpam() || !thread.isInInbox()) {
+      thread.moveToInbox();
+      console.log(`rescueFromSpam_: moved thread ${thread.getId()} to Inbox for msgId=${msgId}`);
+    }
+  } catch (e) {
+    console.log(`rescueFromSpam_: could not move thread ${thread.getId()}: ${e && e.message}`);
+  }
 }
 
 // ===== Idempotency helpers =====
@@ -527,10 +590,9 @@ function sparseSyncPersonsCache() {
 
 // ===== DEBUG UTILITIES (non-destructive) =====
 function debugListInboxCandidates(limit) {
-  const q = `deliveredto:${SALES_INBOX} newer_than:${SEARCH_WINDOW} -label:"${LABEL_ACCEPT}" -label:"${LABEL_FILTERED}"`;
-  const threads = GmailApp.search(q, 0, limit || 20);
+  const threads = searchLeadThreads_().slice(0, limit || 20);
   const dedupe = loadDedupe();
-  console.log(`Query: ${q} threads=${threads.length}`);
+  console.log(`Query: ${leadBaseQuery_()} (+ in:spam=${SEARCH_SPAM_TOO}) threads=${threads.length}`);
   let count = 0;
   for (const thread of threads) {
     const messages = thread.getMessages().slice().reverse();

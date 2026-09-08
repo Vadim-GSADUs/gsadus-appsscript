@@ -29,12 +29,25 @@ var SPAM_KEYWORDS = [
 // TLDs essentially never used by genuine California ADU customers.
 var SPAM_TLDS = ['ru', 'su', 'cn', 'top', 'xyz', 'click', 'space', 'sbs', 'icu', 'rest', 'buzz', 'monster'];
 
+// Email domains used exclusively by the bot networks hitting the form (Aug 2026: ~50
+// submissions from savmask.com, all "Moscow", phone 0, transliterated Russian names).
+// A hit here is a strong signal on its own — add domains as new networks show up.
+var SPAM_EMAIL_DOMAINS = ['savmask.com'];
+
 // Known internal / vendor test markers.
 var TEST_EMAILS = ['sample@only.com', 'test@test.test', 'kova@sampletest.com'];
 var TEST_DOMAINS = ['kova.team'];
 var TEST_NAME_RE = /^(sample only|sample|testing|test|kova test|marketing test)\b/i;
 
-var SPAM_SCORE_THRESHOLD = 3;
+// Scoring (recalibrated 2026-09-01 after real leads were found among the rejects):
+//   strong = 4 (rejects alone), medium = 2, weak = 1, threshold = 4.
+// So: one strong signal, or two medium signals, rejects. A medium plus any number of
+// weak signals (e.g. junk TLD + odd phone, or bot-looking name + odd phone) PASSES —
+// those combinations were dropping genuine homeowners. Precision over recall.
+var SCORE_STRONG = 4;
+var SCORE_MEDIUM = 2;
+var SCORE_WEAK = 1;
+var SPAM_SCORE_THRESHOLD = 4;
 
 /**
  * @param {{name:string, email:string, phone:string, message:string}} input
@@ -57,28 +70,30 @@ function classifyLead(input) {
   // ---- Strong signals (any one is enough on its own) ----
   // Cyrillic / CJK / Hiragana-Katakana => not a local ADU lead.
   if (/[Ѐ-ӿ一-鿿぀-ヿ가-힯]/.test(nameAndMsg)) {
-    score += 3; reasons.push('non-latin-script');
+    score += SCORE_STRONG; reasons.push('non-latin-script');
   }
   // Blocklisted keyword.
   for (var i = 0; i < SPAM_KEYWORDS.length; i++) {
-    if (hay.indexOf(SPAM_KEYWORDS[i]) !== -1) { score += 3; reasons.push('keyword:' + SPAM_KEYWORDS[i]); break; }
+    if (hay.indexOf(SPAM_KEYWORDS[i]) !== -1) { score += SCORE_STRONG; reasons.push('keyword:' + SPAM_KEYWORDS[i]); break; }
   }
+  // Known bot-network email domain.
+  if (domain && SPAM_EMAIL_DOMAINS.indexOf(domain) !== -1) { score += SCORE_STRONG; reasons.push('spam-domain:' + domain); }
 
-  // ---- Medium signals (need one more to reject) ----
-  // URL / anchor in name or message. Weighted so a lone link from a real
-  // homeowner does not, by itself, get dropped.
-  if (/(https?:\/\/|www\.|\[url|<a\s|\bhref=)/i.test(nameAndMsg)) {
-    score += 2; reasons.push('contains-url');
-  }
+  // ---- Medium signals (two of these reject; one does not) ----
   // Junk email TLD.
-  if (tld && SPAM_TLDS.indexOf(tld) !== -1) { score += 2; reasons.push('junk-tld:' + tld); }
+  if (tld && SPAM_TLDS.indexOf(tld) !== -1) { score += SCORE_MEDIUM; reasons.push('junk-tld:' + tld); }
   // Bot name pattern: word + underscore + 2-4 mixed letters (mostbet_tnEr, kolca_wooa).
-  if (/[A-Za-z]{3,}_[A-Za-z]{2,4}\b/.test(name)) { score += 2; reasons.push('bot-name-suffix'); }
+  if (/[A-Za-z]{3,}_[A-Za-z]{2,4}\b/.test(name)) { score += SCORE_MEDIUM; reasons.push('bot-name-suffix'); }
 
-  // ---- Weak supporting signals ----
+  // ---- Weak supporting signals (never reject on their own, even combined) ----
+  // URL / anchor in name or message. Homeowners paste Zillow / Maps / listing links, so
+  // this was demoted from medium to weak (2026-09-01).
+  if (/(https?:\/\/|www\.|\[url|<a\s|\bhref=)/i.test(nameAndMsg)) {
+    score += SCORE_WEAK; reasons.push('contains-url');
+  }
   // Phone present but clearly invalid (e.g. "0", "505050"); empty phone is fine (email-only lead).
   var digits = phone.replace(/[^\d]/g, '');
-  if (digits.length > 0 && digits.length < 7) { score += 1; reasons.push('invalid-phone'); }
+  if (digits.length > 0 && digits.length < 7) { score += SCORE_WEAK; reasons.push('invalid-phone'); }
 
   var isSpam = score >= SPAM_SCORE_THRESHOLD;
 
