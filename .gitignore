@@ -2,3 +2,6 @@ node_modules/
 bak/
 *.bak
 localhost
+
+# Agent worktrees (Claude Code, Codex): local checkouts, never committed
+.claude/worktrees/
