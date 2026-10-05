@@ -171,6 +171,40 @@ var EMAIL_PROFILES = [
         regex: /Message\s*:\s*([\s\S]*?)(?=\s*-{3,}\s*(?:\r?\n|$)|\n\s*(?:Date|Time|Page\s*URL|User\s*Agent|Remote\s*IP|Powered\s*by)\s*:|$)/i
       }
     }
+  },
+
+  // ---------------------------------------------------------
+  // PROFILE 4: "Drop Us a Note" quote form (gsadus.com, first seen 2026-08-03; added 2026-09-01)
+  // Subject: New ADU quote request from {name}
+  // From:    sales@gsadus.com  (the site sends it AS the sales inbox; Reply-To = requester)
+  // Body:    an HTML table where each label sits in its own row and the value in the NEXT
+  //          row — so after HTML stripping every value is on the line(s) after its label:
+  //            Full name / Phone / Email / Address / Drop Us a Note
+  //          Regexes therefore anchor on "label, newline, first non-blank line", and a
+  //          negative lookahead stops an EMPTY field from swallowing the next label.
+  // ---------------------------------------------------------
+  {
+    key: 'PROFILE_QUOTE_REQUEST',
+    subjectIncludes: 'New ADU quote request from',
+
+    patterns: {
+      fullName: {
+        regex: /(?:^|\n)[ \t]*Full\s*name[ \t]*\n\s*(?!(?:Phone|Email|Address|Drop\s*Us\s*a\s*Note)\s*\n)([^\n]*\S[^\n]*)/i
+      },
+      mobilePhone: {
+        regex: /(?:^|\n)[ \t]*Phone[ \t]*\n\s*(?!(?:Email|Address|Drop\s*Us\s*a\s*Note)\s*\n)([0-9+()\-.\s]*\d[0-9+()\-.\s]*)/i
+      },
+      email: {
+        regex: /(?:^|\n)[ \t]*Email[ \t]*\n\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i
+      },
+      address: {
+        regex: /(?:^|\n)[ \t]*Address[ \t]*\n\s*(?!(?:Drop\s*Us\s*a\s*Note)\s*\n)([^\n]*\S[^\n]*)/i
+      },
+      // Everything after the "Drop Us a Note" label up to the form-plugin footer.
+      note: {
+        regex: /(?:^|\n)[ \t]*Drop\s*Us\s*a\s*Note[ \t]*\n\s*([\s\S]*?)(?=\n\s*(?:This\s+e-?mail\s+was\s+sent|Sent\s+from|Powered\s+by|-{3,})|\s*$)/i
+      }
+    }
   }
   // Add more profiles here as needed.
 ];
