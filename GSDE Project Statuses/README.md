@@ -10,9 +10,11 @@
 >
 > That drive was deleted on 2026-10-16, and both folder IDs now return "not found".
 >
-> Still on Google's side, for the owner: delete any time trigger on
-> `discoverNewProjectsTrigger` or `discoverAndSyncTrigger` (script editor → Triggers), then
-> rename or freeze the bound spreadsheet.
+> Triggers: none remain. The stale-project audit of 2026-10-16 found no time trigger. It found
+> one leftover on-edit trigger (`handleAddressEdit`, owned by vadim@), and that was gone by
+> the time of the owner's yes later that day. The script itself stays, because the bound
+> spreadsheet belongs to office@goldenstatede.com. Still on Google's side, for the owner:
+> rename or freeze that spreadsheet.
 >
 > Do not re-enable triggers, `clasp push`, or extend this code. The sources remain for
 > historical reference only (clasp-managed archive).

@@ -21,6 +21,10 @@
 > - The spreadsheet is renamed
 >   `ProposalsDB [ARCHIVED 2026-08-27 - superseded by WebApp proposal engine]`
 >   and frozen in place.
+> - Stale-project audit 2026-10-16: no triggers, no Script Properties (the old
+>   Pipedrive token is gone), and only the editors-only HEAD deployment. The bound
+>   script stays until sales@ deletes it: bound scripts can only be deleted
+>   forever, from the Apps Script dashboard.
 >
 > Do not re-enable triggers, re-deploy the webhook, or extend this code. The
 > sources remain for historical reference only (clasp-managed archive).
