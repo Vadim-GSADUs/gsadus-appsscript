@@ -1,5 +1,10 @@
 # Design Bundles — Dashboard & Pipeline Status / Handoff
 
+> **Deprecated 2026-10-16** (workspace rule 7). This 2026-06-25 snapshot treats the Sheet as the
+> canonical store and the Supabase move as an open decision. The move happened: Design Bundles
+> live in Supabase + GCS and are edited in the WebApp (since 2026-07), and this Sheet chain is
+> frozen legacy. Kept as a record; current state is Vault `wiki/curated/design-bundles.md`.
+
 > Snapshot copied from agent working-memory on **2026-06-25**. Living status of the
 > Design Bundles data pipeline and the MoodBoardV1 dashboard, plus the open
 > architecture decision for the WebCatalog/Supabase integration. Not pushed to

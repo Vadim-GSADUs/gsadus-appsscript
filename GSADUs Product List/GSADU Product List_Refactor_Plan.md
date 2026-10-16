@@ -1,5 +1,9 @@
 # GSADU Product Management System - Refactoring Plan
 
+> **Deprecated 2026-10-16** (workspace rule 7: a plan untouched for 3–4 months is deprecated,
+> not revived). Last edited 2026-03-04, and the Product List script is abandoned legacy (owner).
+> Kept as a record only.
+
 ## Project Overview
 
 **Purpose:** Evolve a static PDF product catalog into a dynamic Google Sheets-based product management system for ADU (Accessory Dwelling Unit) construction materials.

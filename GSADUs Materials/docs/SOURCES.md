@@ -1,5 +1,10 @@
 # Design Bundles — Source-of-Truth & Provenance Contract
 
+> **Deprecated 2026-10-16** (workspace rule 7). This contract (2026-06-25) describes the Sheet
+> as Design Bundles' source of truth. Design Bundles now live in Supabase + GCS and are edited
+> in the WebApp (since 2026-07); this Sheet chain is frozen legacy. Kept as a record; current
+> state is Vault `wiki/curated/design-bundles.md`.
+
 > **Purpose:** This is the authoritative record of *where every piece of Design Bundle
 > data comes from*, how it is extracted, and how it is validated. It is the contract
 > that `Code.js`, `MoodBoard.js`, and any future enrichment tooling must honor.
