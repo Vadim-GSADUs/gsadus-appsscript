@@ -269,7 +269,7 @@ Web/Supabase → `Showcase_Image`; Mood Board → `Material_Image`. This mirrors
 
 - `Vault/wiki/curated/design-bundles.md` — what Design Bundles are + how Revit applies them
 - `Vault/wiki/auto/database-layer.md` — all databases & Apps Script projects
-- `Vault/wiki/curated/planning.md` — GAP-05 (materials undefined), INT-02 (sheet → Revit sync)
+- `Vault/private/wiki/curated/planning.md` (deprecated) — GAP-05 (materials undefined), INT-02 (sheet → Revit sync)
 - `Vault/wiki/curated/architextures-material-sync.md` — texture path setup (VScale/HScale consumer)
 - `Moodboard/Material-Scale-plan.md` — VScale/HScale derivation + JSON extension
 - `Code.js` — the 3-step ETL implementing this contract
